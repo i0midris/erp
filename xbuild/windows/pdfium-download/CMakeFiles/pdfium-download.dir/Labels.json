@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "C:/erp/build/windows/pdfium-download/CMakeFiles/pdfium-download"
+		},
+		{
+			"file" : "C:/erp/build/windows/pdfium-download/CMakeFiles/dc33b3a2f614dbb219a91dc6917729c9/pdfium-download.rule"
+		},
+		{
+			"file" : "C:/erp/build/windows/pdfium-download/CMakeFiles/0ef186d84f725920d05c54e82fcd3069/pdfium-download-complete.rule"
+		},
+		{
+			"file" : "C:/erp/build/windows/pdfium-download/CMakeFiles/ebba6843309b3f5ddf9b3b75fc979bfe/pdfium-download-install.rule"
+		},
+		{
+			"file" : "C:/erp/build/windows/pdfium-download/CMakeFiles/ebba6843309b3f5ddf9b3b75fc979bfe/pdfium-download-mkdir.rule"
+		},
+		{
+			"file" : "C:/erp/build/windows/pdfium-download/CMakeFiles/ebba6843309b3f5ddf9b3b75fc979bfe/pdfium-download-download.rule"
+		},
+		{
+			"file" : "C:/erp/build/windows/pdfium-download/CMakeFiles/ebba6843309b3f5ddf9b3b75fc979bfe/pdfium-download-update.rule"
+		},
+		{
+			"file" : "C:/erp/build/windows/pdfium-download/CMakeFiles/ebba6843309b3f5ddf9b3b75fc979bfe/pdfium-download-patch.rule"
+		},
+		{
+			"file" : "C:/erp/build/windows/pdfium-download/CMakeFiles/ebba6843309b3f5ddf9b3b75fc979bfe/pdfium-download-configure.rule"
+		},
+		{
+			"file" : "C:/erp/build/windows/pdfium-download/CMakeFiles/ebba6843309b3f5ddf9b3b75fc979bfe/pdfium-download-build.rule"
+		},
+		{
+			"file" : "C:/erp/build/windows/pdfium-download/CMakeFiles/ebba6843309b3f5ddf9b3b75fc979bfe/pdfium-download-test.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"pdfium-download"
+		],
+		"name" : "pdfium-download"
+	}
+}

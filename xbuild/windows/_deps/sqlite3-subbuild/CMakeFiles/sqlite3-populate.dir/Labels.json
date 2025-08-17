@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "C:/erp/build/windows/_deps/sqlite3-subbuild/CMakeFiles/sqlite3-populate"
+		},
+		{
+			"file" : "C:/erp/build/windows/_deps/sqlite3-subbuild/CMakeFiles/f6a6f3e68523bf29a103e7f7b291a5d9/sqlite3-populate.rule"
+		},
+		{
+			"file" : "C:/erp/build/windows/_deps/sqlite3-subbuild/CMakeFiles/b4d77aa154c684ea6bd8562e3ee9b377/sqlite3-populate-complete.rule"
+		},
+		{
+			"file" : "C:/erp/build/windows/_deps/sqlite3-subbuild/CMakeFiles/fa34cb52da6b343dbd5e307380cde3b8/sqlite3-populate-install.rule"
+		},
+		{
+			"file" : "C:/erp/build/windows/_deps/sqlite3-subbuild/CMakeFiles/fa34cb52da6b343dbd5e307380cde3b8/sqlite3-populate-mkdir.rule"
+		},
+		{
+			"file" : "C:/erp/build/windows/_deps/sqlite3-subbuild/CMakeFiles/fa34cb52da6b343dbd5e307380cde3b8/sqlite3-populate-download.rule"
+		},
+		{
+			"file" : "C:/erp/build/windows/_deps/sqlite3-subbuild/CMakeFiles/fa34cb52da6b343dbd5e307380cde3b8/sqlite3-populate-update.rule"
+		},
+		{
+			"file" : "C:/erp/build/windows/_deps/sqlite3-subbuild/CMakeFiles/fa34cb52da6b343dbd5e307380cde3b8/sqlite3-populate-patch.rule"
+		},
+		{
+			"file" : "C:/erp/build/windows/_deps/sqlite3-subbuild/CMakeFiles/fa34cb52da6b343dbd5e307380cde3b8/sqlite3-populate-configure.rule"
+		},
+		{
+			"file" : "C:/erp/build/windows/_deps/sqlite3-subbuild/CMakeFiles/fa34cb52da6b343dbd5e307380cde3b8/sqlite3-populate-build.rule"
+		},
+		{
+			"file" : "C:/erp/build/windows/_deps/sqlite3-subbuild/CMakeFiles/fa34cb52da6b343dbd5e307380cde3b8/sqlite3-populate-test.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"sqlite3-populate"
+		],
+		"name" : "sqlite3-populate"
+	}
+}

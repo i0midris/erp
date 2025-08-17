@@ -1,0 +1,14 @@
+# Target labels
+ sqlite3-populate
+# Source files and their labels
+C:/erp/build/windows/_deps/sqlite3-subbuild/CMakeFiles/sqlite3-populate
+C:/erp/build/windows/_deps/sqlite3-subbuild/CMakeFiles/f6a6f3e68523bf29a103e7f7b291a5d9/sqlite3-populate.rule
+C:/erp/build/windows/_deps/sqlite3-subbuild/CMakeFiles/b4d77aa154c684ea6bd8562e3ee9b377/sqlite3-populate-complete.rule
+C:/erp/build/windows/_deps/sqlite3-subbuild/CMakeFiles/fa34cb52da6b343dbd5e307380cde3b8/sqlite3-populate-install.rule
+C:/erp/build/windows/_deps/sqlite3-subbuild/CMakeFiles/fa34cb52da6b343dbd5e307380cde3b8/sqlite3-populate-mkdir.rule
+C:/erp/build/windows/_deps/sqlite3-subbuild/CMakeFiles/fa34cb52da6b343dbd5e307380cde3b8/sqlite3-populate-download.rule
+C:/erp/build/windows/_deps/sqlite3-subbuild/CMakeFiles/fa34cb52da6b343dbd5e307380cde3b8/sqlite3-populate-update.rule
+C:/erp/build/windows/_deps/sqlite3-subbuild/CMakeFiles/fa34cb52da6b343dbd5e307380cde3b8/sqlite3-populate-patch.rule
+C:/erp/build/windows/_deps/sqlite3-subbuild/CMakeFiles/fa34cb52da6b343dbd5e307380cde3b8/sqlite3-populate-configure.rule
+C:/erp/build/windows/_deps/sqlite3-subbuild/CMakeFiles/fa34cb52da6b343dbd5e307380cde3b8/sqlite3-populate-build.rule
+C:/erp/build/windows/_deps/sqlite3-subbuild/CMakeFiles/fa34cb52da6b343dbd5e307380cde3b8/sqlite3-populate-test.rule
