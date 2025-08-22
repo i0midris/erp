@@ -1,949 +1,1086 @@
-import 'dart:convert';
-
-import 'package:cached_network_image/cached_network_image.dart';
+import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
+import 'dart:io';
 
-// ===== Project deps already present in your repo =====
+import '/config.dart';
 import '/helpers/AppTheme.dart';
-import '/helpers/SizeConfig.dart';
-import '/helpers/otherHelpers.dart';
-import '/locale/MyLocalizations.dart';
-import '/models/product_model.dart';
-import '/models/variations.dart';
+
+import '/models/contact_model.dart'; // exposes Contact().get()
 import '/models/sell.dart';
 import '/models/sellDatabase.dart';
-import '/models/paymentDatabase.dart';
 import '/models/system.dart';
+import '/models/variations.dart';
+import 'package:printing/printing.dart';
+import 'package:pdf/pdf.dart';
+import '/models/invoice.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:flutter/foundation.dart';
 
-/// PosSinglePage — production-ready single page POS
-/// -------------------------------------------------
-/// ✓ Uses your existing DB/models (Variations, Sell, SellDatabase, PaymentDatabase, System)
-/// ✓ Fully null-safe (no `!`), defensive around DB/JSON shapes
-/// ✓ Responsive: grid + cart side-by-side on wide screens, stacked on narrow
-/// ✓ Arabic/LTR auto — relies on MaterialApp locale (no manual Directionality)
-/// ✓ Search by name/SKU/Barcode (passes to Variations.get searchTerm)
-/// ✓ Quantity +/- , delete line, order-level discount/tax, computed totals
-/// ✓ Cash checkout creates sale + payment, attaches lines, then fires API sync
-///
-/// Route usage:
-/// Navigator.pushNamed(context, '/pos-single', arguments: {
-///   'locationId': <int>, // optional; will fall back to System().get('selected_location')
-///   'sellId': <int?>,    // optional; to edit an existing sale
-/// });
+// =============================================================================
+// Safe helpers
+// =============================================================================
+
+double _asDouble(Object? v, [double def = 0]) {
+  if (v == null) return def;
+  if (v is num) return v.toDouble();
+  if (v is String) return double.tryParse(v) ?? def;
+  return def;
+}
+
+String _generateInvoiceNo({String prefix = 'INV'}) {
+  final now = DateTime.now();
+  final y = now.year;
+  final m = now.month.toString().padLeft(2, '0');
+  final d = now.day.toString().padLeft(2, '0');
+  final tail =
+      (now.millisecondsSinceEpoch % 1000000).toString().padLeft(6, '0');
+  return '$prefix-$y$m$d-$tail';
+}
+
+int _asInt(Object? v, [int def = 0]) {
+  if (v == null) return def;
+  if (v is int) return v;
+  if (v is num) return v.toInt();
+  if (v is String) return int.tryParse(v) ?? def;
+  return def;
+}
+
+String _asString(Object? v, [String def = '']) => v?.toString() ?? def;
+
+String _fmt(double v) => v.toStringAsFixed(2);
+
+// =============================================================================
+// Typed models (prefixed to avoid name clashes with your pages/routes)
+// =============================================================================
+
+class PosProductModel {
+  final int productId;
+  final int variationId;
+  final String displayName;
+  final String imageUrl;
+  final double priceIncTax;
+  final double sellPrice;
+  final double unitPrice;
+  final bool enableStock;
+  final double stockAvailable;
+  final int? taxRateId;
+
+  PosProductModel({
+    required this.productId,
+    required this.variationId,
+    required this.displayName,
+    required this.imageUrl,
+    required this.priceIncTax,
+    required this.sellPrice,
+    required this.unitPrice,
+    required this.enableStock,
+    required this.stockAvailable,
+    required this.taxRateId,
+  });
+
+  factory PosProductModel.fromMap(Map m) => PosProductModel(
+        productId: _asInt(m['product_id'] ?? m['id']),
+        variationId: _asInt(m['variation_id'] ?? m['id']),
+        displayName: _asString(m['display_name'] ?? m['name']),
+        imageUrl: _asString(m['product_image_url']),
+        priceIncTax: _asDouble(m['sell_price_inc_tax']),
+        sellPrice: _asDouble(m['sell_price']),
+        unitPrice: _asDouble(m['unit_price']),
+        enableStock: m['enable_stock'] == 1 || m['enable_stock'] == true,
+        stockAvailable: _asDouble(m['stock_available'], 0),
+        taxRateId: (m['tax_rate_id'] == null || _asInt(m['tax_rate_id']) == 0)
+            ? null
+            : _asInt(m['tax_rate_id']),
+      );
+
+  double get chosenUnitPrice => (priceIncTax != 0)
+      ? priceIncTax
+      : ((sellPrice != 0) ? sellPrice : unitPrice);
+}
+
+class PosCartLine {
+  final int id; // local DB id for sell_lines
+  final int productId;
+  final int variationId;
+  final String name;
+  final double unitPrice;
+  final double quantity;
+  final double discount;
+  final double taxAmount;
+
+  const PosCartLine({
+    required this.id,
+    required this.productId,
+    required this.variationId,
+    required this.name,
+    required this.unitPrice,
+    required this.quantity,
+    required this.discount,
+    required this.taxAmount,
+  });
+
+  PosCartLine copyWith(
+          {double? quantity,
+          double? unitPrice,
+          double? discount,
+          double? taxAmount}) =>
+      PosCartLine(
+        id: id,
+        productId: productId,
+        variationId: variationId,
+        name: name,
+        unitPrice: unitPrice ?? this.unitPrice,
+        quantity: quantity ?? this.quantity,
+        discount: discount ?? this.discount,
+        taxAmount: taxAmount ?? this.taxAmount,
+      );
+
+  factory PosCartLine.fromDb(Map row) => PosCartLine(
+        id: _asInt(row['id']),
+        productId: _asInt(row['product_id']),
+        variationId: _asInt(row['variation_id']),
+        name: _asString(row['name'] ?? row['display_name']),
+        unitPrice: _asDouble(row['unit_price']),
+        quantity: _asDouble(row['quantity'], 1),
+        discount: _asDouble(row['discount'] ?? row['discount_amount'], 0),
+        taxAmount: _asDouble(row['tax_amount'], 0),
+      );
+}
+
+class PosCategoryModel {
+  final int id;
+  final String name;
+  PosCategoryModel(this.id, this.name);
+  factory PosCategoryModel.fromMap(Map m) =>
+      PosCategoryModel(_asInt(m['id']), _asString(m['name']));
+}
+
+class PosBrandModel {
+  final int id;
+  final String name;
+  PosBrandModel(this.id, this.name);
+  factory PosBrandModel.fromMap(Map m) =>
+      PosBrandModel(_asInt(m['id']), _asString(m['name']));
+}
+
+class PosCustomerModel {
+  final int id;
+  final String name;
+  PosCustomerModel(this.id, this.name);
+  factory PosCustomerModel.fromMap(Map m) => PosCustomerModel(
+      _asInt(m['id']), _asString(m['name'] ?? m['first_name']));
+}
+
+// =============================================================================
+// Repo adapters (wrap your existing API classes)
+// =============================================================================
+
+class VariationRepo {
+  Future<List<PosProductModel>> fetch(
+      {int? brandId,
+      required int categoryId,
+      required String searchTerm,
+      required int locationId,
+      required int page}) async {
+    final res = await Variations().get(
+      brandId: brandId ?? 0,
+      categoryId: categoryId,
+      searchTerm: searchTerm,
+      locationId: locationId,
+      offset: page,
+    );
+    return (res as List).map((e) => PosProductModel.fromMap(e as Map)).toList();
+  }
+}
+
+class SystemRepo {
+  Future<List<PosCategoryModel>> categories() async {
+    final res = await System().getCategories();
+    return (res as List)
+        .map((e) => PosCategoryModel.fromMap(e as Map))
+        .toList();
+  }
+
+  Future<List<PosBrandModel>> brands() async {
+    final res = await System().getBrands();
+    return (res as List).map((e) => PosBrandModel.fromMap(e as Map)).toList();
+  }
+}
+
+class ContactRepo {
+  Future<List<PosCustomerModel>> customers() async {
+    final res = await Contact().get();
+    return (res as List)
+        .map((e) => PosCustomerModel.fromMap(e as Map))
+        .toList();
+  }
+}
+
+class CartRepo {
+  Future<List<PosCartLine>> lines(int locationId) async {
+    final rows = await SellDatabase().getInCompleteLines(locationId);
+    return (rows as List)
+        .map((r) => PosCartLine.fromDb(Map<String, dynamic>.from(r as Map)))
+        .toList();
+  }
+
+  Future<void> delete(int variationId, int productId) async {
+    await SellDatabase().delete(variationId, productId);
+  }
+
+  Future<void> addLine(PosProductModel p) async {
+    final payload = {
+      'product_id': p.productId,
+      'variation_id': p.variationId,
+      'display_name': p.displayName,
+      'sell_price_inc_tax': p.priceIncTax,
+      'sell_price': p.sellPrice,
+      'unit_price': p.chosenUnitPrice,
+      'quantity': 1.0,
+      'discount': 0.0,
+      'discount_amount': 0.0,
+      'discount_type': 'fixed',
+      'tax_amount': 0.0,
+      'tax_rate_id': p.taxRateId,
+    };
+    await Sell().addToCart(payload, null);
+  }
+
+  Future<void> reset() => Sell().resetCart();
+
+  Future<bool> updateQty(PosCartLine line, double qty) async {
+    try {
+      await SellDatabase().update(line.id, {'quantity': qty});
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+}
+
+// =============================================================================
+// Controller
+// =============================================================================
+
+class PosController extends ChangeNotifier {
+  PosController({
+    required this.variationRepo,
+    required this.systemRepo,
+    required this.contactRepo,
+    required this.cartRepo,
+    this.taxRate = 0.15,
+  });
+
+  final VariationRepo variationRepo;
+  final SystemRepo systemRepo;
+  final ContactRepo contactRepo;
+  final CartRepo cartRepo;
+  final double taxRate;
+
+  bool isLoading = true;
+  bool showCategories = false;
+  int? selectedBrandId;
+  int selectedCategoryId = 0;
+  int currentPage = 1;
+  String searchTerm = '';
+  int locationId = 1;
+
+  List<PosProductModel> products = [];
+  List<PosCategoryModel> categories = [];
+  List<PosBrandModel> brands = [];
+  List<PosCustomerModel> customers = [];
+  PosCustomerModel? selectedCustomer;
+  List<PosCartLine> cart = [];
+
+  double subtotal = 0, tax = 0, total = 0, discount = 0, shipping = 0;
+
+  int _productsReqId = 0;
+
+  Future<void> init() async {
+    isLoading = true;
+    notifyListeners();
+    try {
+      await Future.wait([
+        loadProducts(),
+        loadCategories(),
+        loadBrands(),
+        loadCustomers(),
+        loadCart(),
+      ]);
+    } finally {
+      isLoading = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> loadProducts() async {
+    final reqId = ++_productsReqId;
+    final res = await variationRepo.fetch(
+      brandId: selectedBrandId,
+      categoryId: selectedCategoryId,
+      searchTerm: searchTerm,
+      locationId: locationId,
+      page: currentPage,
+    );
+    if (reqId != _productsReqId) return;
+    products = res;
+    notifyListeners();
+  }
+
+  Future<void> loadCategories() async {
+    categories = await systemRepo.categories();
+    notifyListeners();
+  }
+
+  Future<void> loadBrands() async {
+    brands = await systemRepo.brands();
+    notifyListeners();
+  }
+
+  Future<void> loadCustomers() async {
+    customers = await contactRepo.customers();
+    notifyListeners();
+  }
+
+  Future<void> loadCart() async {
+    cart = await cartRepo.lines(locationId);
+    _recalcTotals();
+    notifyListeners();
+  }
+
+  void setSearchTerm(String v) {
+    searchTerm = v;
+    notifyListeners();
+  }
+
+  void setBrand(int? id) {
+    selectedBrandId = id;
+    notifyListeners();
+  }
+
+  void setCategory(int id) {
+    selectedCategoryId = id;
+    notifyListeners();
+  }
+
+  void toggleCategories() {
+    showCategories = !showCategories;
+    notifyListeners();
+  }
+
+  Future<void> addOrIncrease(PosProductModel p) async {
+    final idx = cart.indexWhere(
+        (l) => l.productId == p.productId && l.variationId == p.variationId);
+    if (idx >= 0) {
+      final nextQty = cart[idx].quantity + 1;
+      cart[idx] = cart[idx].copyWith(quantity: nextQty);
+      await cartRepo.updateQty(cart[idx], nextQty);
+      _recalcTotals();
+      notifyListeners();
+    } else {
+      await cartRepo.addLine(p);
+      await loadCart();
+    }
+  }
+
+  Future<void> updateQuantity(int index, double q) async {
+    if (index < 0 || index >= cart.length) return;
+    if (q <= 0) return removeAt(index);
+    final line = cart[index];
+    cart[index] = line.copyWith(quantity: q);
+    await cartRepo.updateQty(line, q);
+    _recalcTotals();
+    notifyListeners();
+  }
+
+  Future<void> removeAt(int index) async {
+    if (index < 0 || index >= cart.length) return;
+    final line = cart[index];
+    await cartRepo.delete(line.variationId, line.productId);
+    await loadCart();
+  }
+
+  Future<void> clearCart() async {
+    await cartRepo.reset();
+    await loadCart();
+  }
+
+  void _recalcTotals() {
+    subtotal = 0;
+    for (final l in cart) {
+      subtotal += l.unitPrice * l.quantity;
+    }
+    tax = subtotal * taxRate;
+    total = subtotal + tax + shipping - discount;
+  }
+
+  /// Creates a local sell, attaches current cart lines, saves payment and tries to sync.
+  /// Returns the new sellId.
+// In PosController
+  Future<int> saveSale({
+    required int customerId,
+    required String discountType,
+    List<Map<String, dynamic>> payments = const [],
+    bool asDebit = false, // 👈 NEW
+  }) async {
+    // 1) Build sale map
+    final saleMap = await Sell().createSell(
+      invoiceNo: _generateInvoiceNo(),
+      transactionDate: DateTime.now().toIso8601String(),
+      contactId: customerId,
+      locId: locationId,
+      taxId: 0, // supply a real tax id if you use one
+      discountType: discountType,
+      discountAmount: discount,
+      invoiceAmount: total,
+      changeReturn: 0.0,
+      pending:
+          asDebit ? total : 0.0, // 👈 put the full amount as pending for debit
+      saleNote: '',
+      staffNote: '',
+      shippingCharges: shipping,
+      shippingDetails: '',
+      saleStatus: 'final',
+    );
+
+    // 2) Insert sell -> get id
+    final sellId = await SellDatabase().storeSell(saleMap);
+
+    // 3) Attach current cart lines to sell & mark as completed
+    await SellDatabase().updateSellLine({'sell_id': sellId, 'is_completed': 1});
+
+    // 4) Only create payment rows if NOT debit
+    if (!asDebit && payments.isNotEmpty) {
+      await Sell().makePayment(payments, sellId);
+    }
+
+    // 5) Try to sync (no-throw if offline)
+    try {
+      await Sell().createApiSell(sellId: sellId);
+    } catch (_) {}
+
+    // 6) Refresh cart
+    await loadCart();
+
+    return sellId;
+  }
+}
+
+// =============================================================================
+// Page Widget
+// =============================================================================
+
 class PosSinglePage extends StatefulWidget {
-  const PosSinglePage({super.key});
+  const PosSinglePage({Key? key}) : super(key: key);
   @override
   State<PosSinglePage> createState() => _PosSinglePageState();
 }
 
 class _PosSinglePageState extends State<PosSinglePage> {
-  // Safe translator: prevents crashes when a key or locale map is missing
-  String _t(BuildContext context, String key, {String fallback = ''}) {
-    try {
-      final loc = AppLocalizations.of(context);
-      final s = loc.translate(key);
-      if (s is String && s.isNotEmpty) return s;
-    } catch (_) {}
-    return fallback.isEmpty ? key : fallback;
-  }
+  static int themeType = 1;
+  final ThemeData themeData = AppTheme.getThemeFromThemeMode(themeType);
+  final CustomAppTheme customAppTheme = AppTheme.getCustomAppTheme(themeType);
 
-  // -------- Theming --------
-  final ThemeData themeData = AppTheme.getThemeFromThemeMode(1);
-
-  // -------- Arguments / context --------
-  int? locationId;
-  int? editingSellId;
-
-  // -------- Search / products --------
   final TextEditingController _searchCtrl = TextEditingController();
-  final FocusNode _searchFocus = FocusNode();
-  final ScrollController _leftScroll = ScrollController();
-  List<Map<String, dynamic>> _products = [];
-  bool _loadingProducts = false;
-  String _lastQuery = '';
+  Timer? _debounce;
+  bool _saving = false;
 
-  // -------- Customers --------
-  List<Map<String, dynamic>> _customers = [];
-  bool _loadingCustomers = false;
-
-  // -------- Cart --------
-  List<Map<String, dynamic>> _cart = [];
-  bool _loadingCart = false;
-
-  // -------- Order-level fields --------
-  int _selectedTaxId = 0; // 0 => none
-  String _discountType = 'fixed'; // 'fixed' | 'percentage'
-  double _discountAmount = 0.0;
-  late List<Map<String, dynamic>> _taxRates; // [{id,name,amount}]
-  int? _selectedCustomerId; // null => walk-in
-
-  // -------- Totals --------
-  double _invoiceTotal = 0.0;
+  late final PosController controller;
 
   @override
   void initState() {
     super.initState();
-    _taxRates = [
-      {'id': 0, 'name': 'بدون ضريبة', 'amount': 0.0}
-    ];
-
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      await _bootstrap();
-    });
-  }
-
-  Future<void> _bootstrap() async {
-    // Read route args if any
-    final args = ModalRoute.of(context)?.settings.arguments;
-    if (args is Map) {
-      locationId = args['locationId'] as int?;
-      editingSellId = args['sellId'] as int?;
-    }
-
-    // Fallback: System().get('selected_location') supports both Map and [Map]
-    if (locationId == null) {
-      try {
-        final sel = await System().get('selected_location');
-        if (sel is List && sel.isNotEmpty && sel.first is Map) {
-          locationId = (sel.first as Map)['id'] as int?;
-        } else if (sel is Map) {
-          locationId = sel['id'] as int?;
-        }
-      } catch (_) {}
-    }
-
-    await _loadTaxRates();
-    await _loadCustomers();
-    await _loadProducts();
-    await _loadCart();
+    controller = PosController(
+      variationRepo: VariationRepo(),
+      systemRepo: SystemRepo(),
+      contactRepo: ContactRepo(),
+      cartRepo: CartRepo(),
+      taxRate: 0, // TODO: load from System()
+    );
+    controller.init();
   }
 
   @override
   void dispose() {
+    _debounce?.cancel();
     _searchCtrl.dispose();
-    _searchFocus.dispose();
-    _leftScroll.dispose();
+    controller.dispose();
     super.dispose();
   }
 
-  // ============================ DATA ============================
-  Future<void> _loadTaxRates() async {
-    try {
-      final list = await System().get('tax');
-      if (list is List) {
-        if (!mounted) return;
-        setState(() {
-          _taxRates.addAll(list.map<Map<String, dynamic>>((e) => {
-                'id': e['id'],
-                'name': e['name'],
-                'amount': double.tryParse(e['amount'].toString()) ?? 0.0,
-              }));
-        });
-      }
-    } catch (_) {}
-  }
-
-  Future<void> _ensureProductFreshness() async {
-    try {
-      final lastSync = await System().getProductLastSync();
-      final needs = lastSync == null ||
-          DateTime.now().difference(DateTime.parse(lastSync)).inMinutes > 10;
-      if (needs && await Helper().checkConnectivity()) {
-        await Variations().refresh();
-        await System().insertProductLastSyncDateTimeNow();
-      }
-    } catch (_) {}
-  }
-
-  Future<void> _loadProducts({String search = ''}) async {
-    setState(() {
-      _loadingProducts = true;
-      _lastQuery = search;
-    });
-
-    await _ensureProductFreshness();
-
-    List list = [];
-    try {
-      list = await Variations().get(
-        brandId: 0,
-        categoryId: 0,
-        subCategoryId: 0,
-        inStock: false,
-        locationId: locationId, // nullable accepted by your layer
-        searchTerm: search.isEmpty ? null : search,
-        barcode: null,
-        offset: 1, // first page
-        byAlphabets: null,
-        byPrice: null,
-      );
-    } catch (_) {}
-
-    // Compute price override by selling price group if present
-    final int sellingPriceGroupId = await _findSellingPriceGroupId();
-
-    final mapped = <Map<String, dynamic>>[];
-    for (final product in list) {
-      double? price;
-      final spg = product['selling_price_group'];
-      if (spg != null &&
-          spg.toString().isNotEmpty &&
-          sellingPriceGroupId != 0) {
-        try {
-          final arr = jsonDecode(spg);
-          for (final el in arr) {
-            if (el['key'] == sellingPriceGroupId) {
-              price = double.tryParse(el['value'].toString());
-              break;
-            }
-          }
-        } catch (_) {}
-      }
-      mapped.add(ProductModel().product(product, price));
-    }
-
-    if (!mounted) return;
-    setState(() {
-      _products = mapped;
-      _loadingProducts = false;
-    });
-  }
-
-  Future<int> _findSellingPriceGroupId() async {
-    try {
-      final groups = await System().get('selling_price_groups');
-      if (groups is List && groups.isNotEmpty) {
-        final first = groups.first;
-        if (first is Map && first['id'] != null) return first['id'] as int;
-      }
-    } catch (_) {}
-    return 0;
-  }
-
-  Future<void> _loadCustomers() async {
-    setState(() => _loadingCustomers = true);
-    List<Map<String, dynamic>> list = [];
-    try {
-      // Prefer 'contacts' cache; fall back to 'customers' if your System key differs
-      final data = await System().get('contacts');
-      if (data is List) {
-        list = List<Map<String, dynamic>>.from(data.cast());
-      } else {
-        final alt = await System().get('customers');
-        if (alt is List) list = List<Map<String, dynamic>>.from(alt.cast());
-      }
-    } catch (_) {}
-
-    if (!mounted) return;
-    setState(() {
-      _customers = list;
-      _loadingCustomers = false;
-    });
-  }
-
-  Future<void> _loadCart() async {
-    setState(() => _loadingCart = true);
-    List lines = [];
-    try {
-      lines = (editingSellId == null)
-          ? await SellDatabase().getInCompleteLines(locationId)
-          : await SellDatabase().getSellBySellId(editingSellId);
-    } catch (e) {
-      // If DB read fails, make sure loader goes away
-      if (mounted) {
-        setState(() => _loadingCart = false);
-      }
-      return;
-    }
-
-    if (!mounted) return;
-    try {
-      final newCart = List<Map<String, dynamic>>.from(lines);
-
-      setState(() {
-        _cart = newCart;
-        if (_cart.isNotEmpty && editingSellId != null) {
-          final sale = _cart.first;
-          _selectedCustomerId = sale['contact_id'];
-          _selectedTaxId = sale['tax_rate_id'] ?? 0;
-          _discountType = sale['discount_type'] ?? 'fixed';
-          _discountAmount =
-              double.tryParse('${sale['discount_amount'] ?? 0}') ?? 0.0;
-        }
-        try {
-          _recalcTotals();
-        } catch (_) {
-          // Fallback so UI doesn't hang in case of any parsing error
-          _invoiceTotal = _subTotal();
-        }
-        _loadingCart = false;
-      });
-    } catch (e) {
-      if (mounted) {
-        setState(() => _loadingCart = false);
-      }
-    }
-  }
-
-  // ============================ CART OPS ============================
-  Future<void> _addProductToCart(Map<String, dynamic> product) async {
-    try {
-      await Sell().addToCart(product, editingSellId);
-    } catch (_) {}
-    await _loadCart();
-  }
-
-  Future<void> _setQty(Map<String, dynamic> line, int newQty) async {
-    if (newQty <= 0) return;
-    try {
-      await SellDatabase().update(line['id'], {'quantity': newQty});
-    } catch (_) {}
-    await _loadCart();
-  }
-
-  Future<void> _removeLine(Map<String, dynamic> line) async {
-    try {
-      await SellDatabase().delete(
-        line['variation_id'],
-        line['product_id'],
-        sellId: editingSellId,
-      );
-    } catch (_) {}
-    await _loadCart();
-  }
-
-  // ============================ TOTALS ============================
-  double _inlineUnitPrice(
-    double price,
-    int? taxId,
-    String discountType,
-    double discountAmount,
-  ) {
-    final tax = _taxRates.firstWhere(
-      (e) => e['id'] == (taxId ?? 0),
-      orElse: () => {'amount': 0.0},
-    )['amount'] as double;
-
-    double up = price;
-    if (discountType == 'fixed') {
-      up = price - discountAmount;
-    } else {
-      up = price - (price * discountAmount / 100);
-    }
-    if (up < 0) up = 0;
-    return up + (up * tax / 100);
-  }
-
-  double _subTotal() {
-    double s = 0.0;
-    for (final l in _cart) {
-      final unit = _inlineUnitPrice(
-        double.tryParse(l['unit_price'].toString()) ?? 0.0,
-        l['tax_rate_id'],
-        l['discount_type'] ?? 'fixed',
-        double.tryParse('${l['discount_amount'] ?? 0}') ?? 0.0,
-      );
-
-      // quantity can be int/double/String in DB, normalize to double
-      final qtyNum = (l['quantity'] is num)
-          ? (l['quantity'] as num).toDouble()
-          : (double.tryParse('${l['quantity']}') ?? 0.0);
-
-      s += unit * qtyNum;
-    }
-    return s;
-  }
-
-  void _recalcTotals() {
-    final sub = _subTotal();
-    final tax = _taxRates.firstWhere(
-      (e) => e['id'] == _selectedTaxId,
-      orElse: () => {'amount': 0.0},
-    )['amount'] as double;
-
-    double t = sub;
-    if (_discountType == 'fixed') {
-      t = sub - _discountAmount;
-    } else {
-      t = sub - (sub * _discountAmount / 100);
-    }
-    if (t < 0) t = 0;
-    _invoiceTotal = t + (t * tax / 100);
-  }
-
-  // ============================ CHECKOUT ============================
-  Future<void> _checkoutCash() async {
-    if (_cart.isEmpty) return;
-
-    final paid = await showDialog<double>(
-      context: context,
-      builder: (context) {
-        final c = TextEditingController(text: _invoiceTotal.toStringAsFixed(2));
-        return AlertDialog(
-          title: const Text('الدفع نقدًا'),
-          content: TextField(
-            controller: c,
-            autofocus: true,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: const InputDecoration(labelText: 'المبلغ المدفوع'),
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, _) {
+        return Scaffold(
+          backgroundColor: themeData.scaffoldBackgroundColor,
+          body: Row(
+            children: [
+              Expanded(flex: 2, child: _buildLeft()),
+              Container(
+                width: 420,
+                decoration: BoxDecoration(
+                  color: themeData.cardColor,
+                  boxShadow: [
+                    BoxShadow(
+                        color: themeData.shadowColor.withOpacity(0.1),
+                        blurRadius: 8,
+                        offset: const Offset(-2, 0))
+                  ],
+                ),
+                child: _buildRight(),
+              ),
+            ],
           ),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('إلغاء')),
-            ElevatedButton(
-              onPressed: () =>
-                  Navigator.pop(context, double.tryParse(c.text) ?? 0),
-              child: const Text('تأكيد'),
-            ),
-          ],
         );
       },
     );
-
-    if (paid == null) return;
-    final pending = (_invoiceTotal - paid);
-    final change = pending < 0 ? -pending : 0.0;
-
-    final now = DateFormat('yyyy-MM-dd HH:mm:ss').format(DateTime.now());
-    final saleInput = {
-      'transaction_date': now,
-      'invoice_no': '',
-      'contact_id': _selectedCustomerId,
-      'location_id': locationId,
-      'status': 'final',
-      'tax_id': _selectedTaxId,
-      'discount_amount': _discountAmount,
-      'discount_type': _discountType,
-      'final_total': _invoiceTotal,
-      'additional_notes': '',
-      'staff_note': '',
-      'shipping_charges': '0',
-      'shipping_details': '',
-    };
-
-    Map<String, dynamic> saleMap = {};
-    try {
-      saleMap = Sell().createSellMap(
-        saleInput,
-        change,
-        pending > 0 ? pending : 0.0,
-      );
-    } catch (_) {}
-
-    int sellId = 0;
-    try {
-      sellId = await SellDatabase().storeSell(saleMap);
-    } catch (_) {}
-
-    try {
-      final db = await SellDatabase().dbProvider.database;
-      await db.update(
-        'sell_lines',
-        {'sell_id': sellId, 'is_completed': 1},
-        where: 'is_completed = 0 AND (sell_id IS NULL OR sell_id = 0)',
-      );
-    } catch (_) {}
-
-    try {
-      await PaymentDatabase().store({
-        'sell_id': sellId,
-        'amount': paid,
-        'method': 'cash',
-        'paid_on': now,
-        'note': '',
-        'account_id': null,
-        'is_return': 0,
-      });
-    } catch (_) {}
-
-    try {
-      await Sell().createApiSell(sellId: sellId);
-    } catch (_) {}
-
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('تم إنشاء الفاتورة بنجاح')),
-    );
-    setState(() {
-      _cart.clear();
-      _invoiceTotal = 0.0;
-    });
-    await _loadCart(); // reload in case there are still pending lines
   }
 
-  // ============================ UI ============================
-  @override
-  Widget build(BuildContext context) {
-    MySize().init(context);
-
-    return Scaffold(
-      backgroundColor: const Color(0xFFF5F7FB),
-      appBar: AppBar(
-        elevation: 0,
-        title: Text(_t(context, 'pos', fallback: 'POS')),
-      ),
-      body: LayoutBuilder(
-        builder: (context, constraints) {
-          final wide = constraints.maxWidth >= 1000;
-          if (wide) {
-            return Row(
-              children: [
-                Expanded(flex: 4, child: _buildProductsPane()),
-                Expanded(flex: 6, child: _buildCartPane()),
-              ],
-            );
-          } else {
-            return Column(
-              children: [
-                Expanded(child: _buildProductsPane()),
-                const Divider(height: 1),
-                Expanded(child: _buildCartPane()),
-              ],
-            );
-          }
-        },
-      ),
-      bottomNavigationBar: _buildBottomBar(),
-    );
-  }
-
-  Widget _buildProductsPane() {
-    return Padding(
-      padding: const EdgeInsets.all(12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _buildSearchBar(),
+  // LEFT PANEL --------------------------------------------------------------
+  Widget _buildLeft() {
+    return Column(children: [
+      Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(color: themeData.cardColor, boxShadow: [
+          BoxShadow(
+              color: themeData.shadowColor.withOpacity(0.1),
+              blurRadius: 4,
+              offset: const Offset(0, 2))
+        ]),
+        child: Column(children: [
+          TextField(
+            controller: _searchCtrl,
+            decoration: InputDecoration(
+              hintText: 'Search products',
+              prefixIcon: const Icon(Icons.search),
+              suffixIcon: _searchCtrl.text.isNotEmpty
+                  ? IconButton(
+                      icon: const Icon(Icons.clear),
+                      onPressed: () {
+                        _searchCtrl.clear();
+                        controller.searchTerm = '';
+                        controller.loadProducts();
+                        setState(() {});
+                      })
+                  : null,
+              border:
+                  OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            onChanged: (v) {
+              controller.searchTerm = v;
+              _debounce?.cancel();
+              _debounce = Timer(
+                  const Duration(milliseconds: 300), controller.loadProducts);
+              setState(() {});
+            },
+          ),
           const SizedBox(height: 12),
-          Expanded(
-            child: _loadingProducts
-                ? const Center(child: CircularProgressIndicator())
-                : _products.isEmpty
-                    ? _EmptyState(
-                        title: _lastQuery.isEmpty
-                            ? 'لا توجد منتجات'
-                            : 'لا توجد نتائج لـ "$_lastQuery"',
-                        subtitle: 'جرّب البحث باسم المنتج أو SKU أو الباركود',
-                        action: TextButton(
-                          onPressed: () => _loadProducts(search: ''),
-                          child: const Text('عرض الكل'),
-                        ),
-                      )
-                    : GridView.builder(
-                        controller: _leftScroll,
-                        gridDelegate:
-                            const SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: 3,
-                          crossAxisSpacing: 10,
-                          mainAxisSpacing: 10,
-                          childAspectRatio: 1.25,
-                        ),
-                        itemCount: _products.length,
-                        itemBuilder: (context, i) => _ProductTile(
-                          product: _products[i],
-                          onTap: () => _addProductToCart(_products[i]),
-                        ),
-                      ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSearchBar() {
-    return TextField(
-      controller: _searchCtrl,
-      focusNode: _searchFocus,
-      onSubmitted: (v) => _loadProducts(search: v.trim()),
-      decoration: InputDecoration(
-        prefixIcon: const Icon(Icons.search),
-        suffixIcon: IconButton(
-          tooltip: 'مسح',
-          onPressed: () {
-            _searchCtrl.clear();
-            _loadProducts(search: '');
-            _searchFocus.requestFocus();
-          },
-          icon: const Icon(Icons.clear),
-        ),
-        hintText: 'أدخل اسم المنتج / SKU / الباركود',
-        filled: true,
-        fillColor: Colors.white,
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide.none,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildCartPane() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
-      child: Column(
-        children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(12),
-              boxShadow: [
-                BoxShadow(color: Colors.black.withOpacity(.05), blurRadius: 6),
-              ],
-            ),
-            child: Row(
-              children: [
-                Expanded(
-                    flex: 6,
-                    child:
-                        Text('المنتج', style: themeData.textTheme.bodyLarge)),
-                Expanded(
-                    flex: 2,
-                    child: Text('الكمية', textAlign: TextAlign.center)),
-                Expanded(
-                    flex: 2, child: Text('السعر', textAlign: TextAlign.center)),
-                Expanded(
-                    flex: 2, child: Text('الإجمالي', textAlign: TextAlign.end)),
-                const SizedBox(width: 32),
-              ],
-            ),
-          ),
-          const SizedBox(height: 8),
-          Expanded(
-            child: _loadingCart
-                ? const Center(child: CircularProgressIndicator())
-                : _cart.isEmpty
-                    ? const _EmptyState(
-                        title: 'السلة فارغة',
-                        subtitle: 'أضف منتجات من القائمة اليسرى')
-                    : ListView.separated(
-                        itemCount: _cart.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 8),
-                        itemBuilder: (context, i) {
-                          final l = _cart[i];
-                          final unit = _inlineUnitPrice(
-                            double.tryParse(l['unit_price'].toString()) ?? 0.0,
-                            l['tax_rate_id'],
-                            l['discount_type'] ?? 'fixed',
-                            double.tryParse('${l['discount_amount'] ?? 0}') ??
-                                0.0,
-                          );
-                          final qtyNum = (l['quantity'] is num)
-                              ? (l['quantity'] as num).toDouble()
-                              : (double.tryParse('${l['quantity']}') ?? 0.0);
-                          final qty = qtyNum.toInt();
-                          final lineTotal = unit * qty;
-                          return Container(
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(12),
-                              boxShadow: [
-                                BoxShadow(
-                                    color: Colors.black.withOpacity(.05),
-                                    blurRadius: 6),
-                              ],
-                            ),
-                            child: Row(
-                              crossAxisAlignment: CrossAxisAlignment.center,
-                              children: [
-                                Expanded(
-                                  flex: 6,
-                                  child: Text(
-                                    '${l['product_name'] ?? l['display_name'] ?? ''}',
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                                Expanded(
-                                  flex: 2,
-                                  child: Row(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      IconButton(
-                                        onPressed: () => _setQty(l, (qty - 1)),
-                                        icon: const Icon(
-                                            Icons.remove_circle_outline),
-                                      ),
-                                      Text('$qty'),
-                                      IconButton(
-                                        onPressed: () => _setQty(l, (qty + 1)),
-                                        icon: const Icon(
-                                            Icons.add_circle_outline),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                Expanded(
-                                  flex: 2,
-                                  child: Text(unit.toStringAsFixed(2),
-                                      textAlign: TextAlign.center),
-                                ),
-                                Expanded(
-                                  flex: 2,
-                                  child: Text(lineTotal.toStringAsFixed(2),
-                                      textAlign: TextAlign.end),
-                                ),
-                                IconButton(
-                                  tooltip: 'حذف',
-                                  onPressed: () => _removeLine(l),
-                                  icon: const Icon(Icons.close),
-                                ),
-                              ],
-                            ),
-                          );
-                        },
-                      ),
-          ),
-          const SizedBox(height: 8),
-          _buildOrderControls(),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildOrderControls() {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(.05), blurRadius: 6)
-        ],
-      ),
-      child: Column(
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: DropdownButtonFormField<int>(
-                  value: _selectedTaxId,
-                  items: _taxRates
-                      .map<DropdownMenuItem<int>>((m) => DropdownMenuItem(
-                            value: m['id'] as int,
-                            child: Text(m['name'].toString()),
-                          ))
-                      .toList(),
-                  onChanged: (v) {
-                    setState(() {
-                      _selectedTaxId = v ?? 0;
-                      _recalcTotals();
-                    });
-                  },
-                  decoration: const InputDecoration(labelText: 'الضريبة'),
+          Row(children: [
+            Expanded(
+              child: ElevatedButton.icon(
+                onPressed: () => controller.toggleCategories(),
+                icon: const Icon(Icons.category),
+                label: const Text('Categories'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: controller.showCategories
+                      ? themeData.colorScheme.primary
+                      : themeData.cardColor,
+                  foregroundColor:
+                      controller.showCategories ? Colors.white : null,
                 ),
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: TextFormField(
-                  initialValue: _discountAmount.toStringAsFixed(2),
-                  keyboardType:
-                      const TextInputType.numberWithOptions(decimal: true),
-                  decoration: const InputDecoration(labelText: 'الخصم'),
-                  onChanged: (v) {
-                    setState(() {
-                      _discountAmount = double.tryParse(v) ?? 0.0;
-                      _recalcTotals();
-                    });
-                  },
-                ),
-              ),
-              const SizedBox(width: 12),
-              DropdownButton<String>(
-                value: _discountType,
-                items: const [
-                  DropdownMenuItem(value: 'fixed', child: Text('مبلغ ثابت')),
-                  DropdownMenuItem(value: 'percentage', child: Text('نسبة %')),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: DropdownButtonFormField<int?>(
+                value: controller.selectedBrandId,
+                decoration: InputDecoration(
+                    labelText: 'Brand',
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8))),
+                items: <DropdownMenuItem<int?>>[
+                  const DropdownMenuItem<int?>(
+                      value: null, child: Text('All brands')),
+                  ...controller.brands.map((b) =>
+                      DropdownMenuItem<int?>(value: b.id, child: Text(b.name))),
                 ],
                 onChanged: (v) {
-                  setState(() {
-                    _discountType = v ?? 'fixed';
-                    _recalcTotals();
-                  });
+                  controller.setBrand(v);
+                  controller.loadProducts();
                 },
               ),
-            ],
+            ),
+          ]),
+        ]),
+      ),
+      if (controller.showCategories)
+        SizedBox(
+          height: 100,
+          child: ListView.builder(
+            padding: const EdgeInsets.all(8),
+            scrollDirection: Axis.horizontal,
+            itemCount: controller.categories.length,
+            itemBuilder: (context, i) {
+              final c = controller.categories[i];
+              final selected = controller.selectedCategoryId == c.id;
+              return Container(
+                margin: const EdgeInsets.only(right: 8),
+                child: FilterChip(
+                  selected: selected,
+                  label: Text(c.name),
+                  onSelected: (sel) {
+                    controller.setCategory(sel ? c.id : 0);
+                    controller.loadProducts();
+                  },
+                ),
+              );
+            },
           ),
-          const SizedBox(height: 8),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              Text('الإجمالي:', style: themeData.textTheme.titleMedium),
-              const SizedBox(width: 8),
-              Text(_invoiceTotal.toStringAsFixed(2),
-                  style: themeData.textTheme.titleLarge),
-            ],
+        ),
+      Expanded(
+        child: controller.isLoading
+            ? const Center(child: CircularProgressIndicator())
+            : _buildProductsGrid(),
+      ),
+    ]);
+  }
+
+  Widget _buildProductsGrid() {
+    final items = controller.products;
+    if (items.isEmpty) {
+      return Center(
+        child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: const [
+              Icon(Icons.inventory_2_outlined, size: 64, color: Colors.grey),
+              SizedBox(height: 16),
+              Text('No products found',
+                  style: TextStyle(color: Colors.grey, fontSize: 18)),
+            ]),
+      );
+    }
+
+    return LayoutBuilder(builder: (context, c) {
+      final cross = ((c.maxWidth / 220).floor()).clamp(1, 8).toInt();
+      return GridView.builder(
+        padding: const EdgeInsets.all(16),
+        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: cross,
+          childAspectRatio: 0.75,
+          crossAxisSpacing: 12,
+          mainAxisSpacing: 12,
+        ),
+        itemCount: items.length,
+        itemBuilder: (context, i) => _productCard(items[i]),
+      );
+    });
+  }
+
+  Widget _productCard(PosProductModel p) {
+    final isOut = p.enableStock && p.stockAvailable <= 0;
+    return Card(
+      elevation: 2,
+      child: InkWell(
+        onTap: isOut
+            ? null
+            : () async {
+                await controller.addOrIncrease(p);
+              },
+        borderRadius: BorderRadius.circular(8),
+        child:
+            Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Expanded(
+            flex: 2,
+            child: Container(
+              decoration: const BoxDecoration(
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(8))),
+              clipBehavior: Clip.antiAlias,
+              child: (p.imageUrl.isNotEmpty)
+                  ? Image.network(p.imageUrl,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => _placeholder())
+                  : _placeholder(),
+            ),
           ),
-        ],
+          Expanded(
+            flex: 1,
+            child: Padding(
+              padding: const EdgeInsets.all(8),
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(p.displayName,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: themeData.textTheme.bodySmall
+                            ?.copyWith(fontWeight: FontWeight.w600)),
+                    const Spacer(),
+                    Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(_fmt(p.chosenUnitPrice),
+                              style: themeData.textTheme.bodySmall?.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                  color: themeData.colorScheme.primary)),
+                          if (p.enableStock)
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                  color: isOut ? Colors.red : Colors.green,
+                                  borderRadius: BorderRadius.circular(10)),
+                              child: Text(p.stockAvailable.toStringAsFixed(0),
+                                  style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.bold)),
+                            ),
+                        ]),
+                  ]),
+            ),
+          ),
+        ]),
       ),
     );
   }
 
-  Widget _buildBottomBar() {
-    return Container(
-      height: 64,
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border(top: BorderSide(color: Colors.black.withOpacity(.06))),
+  Widget _placeholder() => Container(
+      color: Colors.grey[200],
+      child:
+          Icon(Icons.image_not_supported, color: Colors.grey[400], size: 40));
+
+  // RIGHT PANEL -------------------------------------------------------------
+  Widget _buildRight() {
+    return Column(children: [
+      Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+            color: themeData.colorScheme.primary,
+            borderRadius: const BorderRadius.only(
+                bottomLeft: Radius.circular(12),
+                bottomRight: Radius.circular(12))),
+        child: Row(children: [
+          const Icon(Icons.shopping_cart, color: Colors.white),
+          const SizedBox(width: 8),
+          Text('Cart',
+              style: themeData.textTheme.titleLarge
+                  ?.copyWith(color: Colors.white, fontWeight: FontWeight.bold)),
+          const Spacer(),
+          Text('${controller.cart.length} items',
+              style: const TextStyle(color: Colors.white70)),
+        ]),
       ),
-      child: Row(
-        children: [
+      Padding(
+        padding: const EdgeInsets.all(16),
+        child: DropdownButtonFormField<PosCustomerModel?>(
+          value: controller.selectedCustomer,
+          decoration: const InputDecoration(
+              labelText: 'Customer',
+              border: OutlineInputBorder(),
+              prefixIcon: Icon(Icons.person)),
+          items: controller.customers
+              .map((c) => DropdownMenuItem(value: c, child: Text(c.name)))
+              .toList(),
+          onChanged: (c) {
+            controller.selectedCustomer = c;
+            controller.notifyListeners();
+          },
+        ),
+      ),
+      Expanded(
+        child: controller.cart.isEmpty
+            ? _emptyCart()
+            : ListView.builder(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                itemCount: controller.cart.length,
+                itemBuilder: (context, i) => _cartItem(i),
+              ),
+      ),
+      _summary(),
+    ]);
+  }
+
+  Widget _emptyCart() => Center(
+          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+        Icon(Icons.shopping_cart_outlined, size: 80, color: Colors.grey[400]),
+        const SizedBox(height: 16),
+        Text('Your cart is empty',
+            style: themeData.textTheme.titleMedium
+                ?.copyWith(color: Colors.grey[600])),
+        const SizedBox(height: 8),
+        Text('Add products to cart',
+            style: themeData.textTheme.bodyMedium
+                ?.copyWith(color: Colors.grey[500])),
+      ]));
+
+  Widget _cartItem(int index) {
+    final l = controller.cart[index];
+    final total = l.unitPrice * l.quantity;
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Row(children: [
           Expanded(
-            child: Row(
-              children: [
-                const Icon(Icons.person_outline),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: DropdownButton<int?>(
-                    isExpanded: true,
-                    value: _selectedCustomerId,
-                    hint: const Text('عميل زائر'),
-                    items: _customers
-                        .map((c) => DropdownMenuItem<int?>(
-                              value: (c['id'] as int?) ??
-                                  int.tryParse('${c['id']}'),
-                              child: Text(
-                                (c['name'] ??
-                                            c['contact_name'] ??
-                                            c['supplier_business_name'] ??
-                                            ((c['first_name'] ?? '') +
-                                                ' ' +
-                                                (c['last_name'] ?? '')))
-                                        .toString()
-                                        .trim()
-                                        .isEmpty
-                                    ? 'عميل'
-                                    : (c['name'] ??
-                                            c['contact_name'] ??
-                                            c['supplier_business_name'] ??
-                                            ((c['first_name'] ?? '') +
-                                                ' ' +
-                                                (c['last_name'] ?? '')))
-                                        .toString(),
-                              ),
-                            ))
-                        .toList(),
-                    onChanged: (v) => setState(() => _selectedCustomerId = v),
-                  ),
-                ),
-              ],
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                Text(l.name,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: themeData.textTheme.bodyMedium
+                        ?.copyWith(fontWeight: FontWeight.w600)),
+                const SizedBox(height: 4),
+                Text(_fmt(l.unitPrice),
+                    style: themeData.textTheme.bodySmall
+                        ?.copyWith(color: Colors.grey[600])),
+              ])),
+          const SizedBox(width: 8),
+          Row(children: [
+            IconButton(
+                onPressed: () =>
+                    controller.updateQuantity(index, l.quantity - 1),
+                icon: const Icon(Icons.remove_circle_outline),
+                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                padding: EdgeInsets.zero),
+            SizedBox(
+                width: 50,
+                child: Text(
+                    l.quantity.toStringAsFixed(Config.quantityPrecision),
+                    textAlign: TextAlign.center,
+                    style: themeData.textTheme.bodyMedium
+                        ?.copyWith(fontWeight: FontWeight.bold))),
+            IconButton(
+                onPressed: () =>
+                    controller.updateQuantity(index, l.quantity + 1),
+                icon: const Icon(Icons.add_circle_outline),
+                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                padding: EdgeInsets.zero),
+          ]),
+          const SizedBox(width: 8),
+          Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+            Text(_fmt(total),
+                style: themeData.textTheme.bodyMedium
+                    ?.copyWith(fontWeight: FontWeight.bold)),
+            IconButton(
+                onPressed: () => controller.removeAt(index),
+                icon: const Icon(Icons.delete_outline, color: Colors.red),
+                constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
+                padding: EdgeInsets.zero),
+          ]),
+        ]),
+      ),
+    );
+  }
+
+  Widget _summary() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+          color: themeData.cardColor,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+          boxShadow: [
+            BoxShadow(
+                color: themeData.shadowColor.withOpacity(0.1),
+                blurRadius: 8,
+                offset: const Offset(0, -2))
+          ]),
+      child: Column(children: [
+        _summaryRow('Subtotal', _fmt(controller.subtotal)),
+        if (controller.discount > 0)
+          _summaryRow('Discount', '-${_fmt(controller.discount)}',
+              color: Colors.green),
+        _summaryRow('Tax', _fmt(controller.tax)),
+        if (controller.shipping > 0)
+          _summaryRow('Shipping', _fmt(controller.shipping)),
+        const Divider(thickness: 2),
+        _summaryRow('Total', _fmt(controller.total), isTotal: true),
+        const SizedBox(height: 16),
+        Row(children: [
+          Expanded(
+            child: OutlinedButton.icon(
+              onPressed: controller.cart.isEmpty || _saving
+                  ? null
+                  : () async {
+                      await controller.clearCart();
+                    },
+              icon: const Icon(Icons.clear_all),
+              label: const Text('Clear'),
             ),
-          ),
-          Text('المجموع القابل للدفع: ',
-              style: themeData.textTheme.titleMedium),
-          const SizedBox(width: 6),
-          Text(_invoiceTotal.toStringAsFixed(2),
-              style: themeData.textTheme.titleLarge),
-          const SizedBox(width: 12),
-          FilledButton.icon(
-            onPressed: _cart.isEmpty ? null : _checkoutCash,
-            icon: const Icon(Icons.payments),
-            label: const Text('دفع نقدًا'),
           ),
           const SizedBox(width: 8),
-          OutlinedButton.icon(
-            onPressed: _cart.isEmpty ? null : () {/* TODO: card payments */},
-            icon: const Icon(Icons.credit_card),
-            label: const Text('بطاقة'),
-          ),
-        ],
-      ),
-    );
-  }
-}
 
-// ---------------- Helpers ----------------
-class _ProductTile extends StatelessWidget {
-  final Map<String, dynamic> product;
-  final VoidCallback onTap;
-  const _ProductTile({required this.product, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    final price = product['unit_price'];
-    final url = product['product_image_url']?.toString() ?? '';
-    final hasValidUrl = url.isNotEmpty && !url.endsWith('/no_data.jpg');
-
-    return InkWell(
-      onTap: onTap,
-      child: Container(
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          boxShadow: [
-            BoxShadow(color: Colors.black.withOpacity(.05), blurRadius: 6),
-          ],
-        ),
-        padding: const EdgeInsets.all(10),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Expanded(
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: hasValidUrl
-                    ? CachedNetworkImage(
-                        imageUrl: url,
-                        fit: BoxFit.cover,
-                        placeholder: (_, __) =>
-                            const Center(child: CircularProgressIndicator()),
-                        errorWidget: (_, __, ___) =>
-                            const Icon(Icons.inventory_2_outlined),
-                      )
-                    : const ColoredBox(
-                        color: Color(0xfff1f1f1),
-                        child: Icon(Icons.inventory_2_outlined),
-                      ),
+          // New DEBIT button
+          Expanded(
+            child: ElevatedButton.icon(
+              onPressed: controller.cart.isEmpty || _saving ? null : _saveDebit,
+              icon: _saving
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.credit_card),
+              label: Text(_saving ? 'Saving…' : 'Debit'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: themeData.colorScheme.primary,
+                foregroundColor: Colors.white,
               ),
             ),
-            const SizedBox(height: 6),
-            Text(
-              product['display_name'] ?? product['product_name'] ?? '',
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(width: 8),
+
+          // Existing cash/checkout
+          Expanded(
+            flex: 2,
+            child: ElevatedButton.icon(
+              onPressed:
+                  controller.cart.isEmpty || _saving ? null : _saveDirectly,
+              icon: _saving
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.payment),
+              label: Text(_saving ? 'Saving…' : 'Checkout'),
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: themeData.colorScheme.primary,
+                  foregroundColor: Colors.white),
             ),
-            const SizedBox(height: 4),
-            Text(
-              price is num
-                  ? price.toStringAsFixed(2)
-                  : (double.tryParse('$price')?.toStringAsFixed(2) ?? ''),
-              textAlign: TextAlign.start,
-            ),
-          ],
-        ),
-      ),
+          ),
+        ]),
+      ]),
     );
   }
-}
 
-class _EmptyState extends StatelessWidget {
-  final String title;
-  final String? subtitle;
-  final Widget? action;
-  const _EmptyState({required this.title, this.subtitle, this.action});
+  Widget _summaryRow(String label, String value,
+      {Color? color, bool isTotal = false}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+        Text(label,
+            style: themeData.textTheme.bodyMedium?.copyWith(
+                fontWeight: isTotal ? FontWeight.bold : FontWeight.normal,
+                fontSize: isTotal ? 16 : 14)),
+        Text(value,
+            style: themeData.textTheme.bodyMedium?.copyWith(
+                fontWeight: isTotal ? FontWeight.bold : FontWeight.w600,
+                fontSize: isTotal ? 16 : 14,
+                color:
+                    color ?? (isTotal ? themeData.colorScheme.primary : null))),
+      ]),
+    );
+  }
 
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(title, style: Theme.of(context).textTheme.titleMedium),
-          if (subtitle != null) ...[
-            const SizedBox(height: 6),
-            Text(subtitle!, style: Theme.of(context).textTheme.bodySmall),
-          ],
-          if (action != null) ...[
-            const SizedBox(height: 10),
-            action!,
-          ]
-        ],
-      ),
+  Future<void> _saveDirectly() async {
+    if (controller.cart.isEmpty) return;
+
+    setState(() => _saving = true);
+    int? sellId;
+    try {
+      final customerId = controller.selectedCustomer?.id ?? 1;
+      final payments = <Map<String, dynamic>>[
+        {
+          'method': 'cash',
+          'amount': controller.total,
+          'note': 'POS',
+          'account_id': null
+        },
+      ];
+
+      sellId = await controller.saveSale(
+        customerId: customerId,
+        discountType: 'fixed',
+        payments: payments,
+      );
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+            content: Text('Sale saved (#$sellId)'),
+            backgroundColor: Colors.green),
+      );
+    } catch (e, st) {
+      if (!mounted) return;
+      debugPrint('SAVE FAILED: $e\n$st');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+            content: Text('Failed to save sale: $e'),
+            backgroundColor: Colors.red),
+      );
+      return; // don't try to print
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+
+    // Print in a separate try/catch so we can show a correct message
+    try {
+      await _printInvoice(sellId!);
+    } catch (e, st) {
+      debugPrint('PRINT FAILED: $e\n$st');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+            content: Text('Failed to print invoice: $e'),
+            backgroundColor: Colors.orange),
+      );
+    }
+  }
+
+  Future<void> _saveDebit() async {
+    if (controller.cart.isEmpty) return;
+
+    setState(() => _saving = true);
+    try {
+      final customerId =
+          controller.selectedCustomer?.id ?? 1; // Walk-in default
+
+      final sellId = await controller.saveSale(
+        customerId: customerId,
+        discountType: 'fixed',
+        payments: const [], // 👈 NO payment lines
+        asDebit: true, // 👈 mark as debit (pending)
+      );
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+            content: Text('Sale saved (DEBIT) (#$sellId)'),
+            backgroundColor: Colors.green),
+      );
+      await _printInvoice(sellId);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+            content: Text('Failed to save sale: $e'),
+            backgroundColor: Colors.red),
+      );
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _printInvoice(int sellId) async {
+    const taxId = 0;
+    final html =
+        await InvoiceFormatter().generateInvoice(sellId, taxId, context);
+
+    // Optional: save HTML for debugging (non-web only)
+    if (!kIsWeb) {
+      try {
+        final dir = await getTemporaryDirectory();
+        final f = File('${dir.path}/invoice-$sellId.html');
+        await f.writeAsString(html);
+        debugPrint('Invoice HTML saved to: ${f.path}');
+      } catch (e) {
+        debugPrint('Could not save invoice HTML: $e');
+      }
+    }
+
+    await Printing.layoutPdf(
+      onLayout: (format) => Printing.convertHtml(html: html, format: format),
     );
   }
 }
