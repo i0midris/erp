@@ -417,12 +417,23 @@ class PosController extends ChangeNotifier {
   /// Creates a local sell, attaches current cart lines, saves payment and tries to sync.
   /// Returns the new sellId.
 // In PosController
+  // In PosController
   Future<int> saveSale({
     required int customerId,
     required String discountType,
     List<Map<String, dynamic>> payments = const [],
-    bool asDebit = false, // 👈 NEW
+    bool asDebit = false, // true for debit/partial (anything not fully paid)
   }) async {
+    // Sum of payments (if any)
+    final double paid = payments.fold<double>(
+      0.0,
+      (sum, p) => sum + _asDouble(p['amount']),
+    );
+
+    // Pending amount (only when asDebit). Clamp to >= 0
+    double pendingAmount = asDebit ? (total - paid) : 0.0;
+    if (pendingAmount < 0) pendingAmount = 0.0;
+
     // 1) Build sale map
     final saleMap = await Sell().createSell(
       invoiceNo: _generateInvoiceNo(),
@@ -434,8 +445,7 @@ class PosController extends ChangeNotifier {
       discountAmount: discount,
       invoiceAmount: total,
       changeReturn: 0.0,
-      pending:
-          asDebit ? total : 0.0, // 👈 put the full amount as pending for debit
+      pending: pendingAmount, // 👈 supports DEBIT or PARTIAL
       saleNote: '',
       staffNote: '',
       shippingCharges: shipping,
@@ -449,8 +459,8 @@ class PosController extends ChangeNotifier {
     // 3) Attach current cart lines to sell & mark as completed
     await SellDatabase().updateSellLine({'sell_id': sellId, 'is_completed': 1});
 
-    // 4) Only create payment rows if NOT debit
-    if (!asDebit && payments.isNotEmpty) {
+    // 4) Record payments (even if asDebit) 👈 CHANGED
+    if (payments.isNotEmpty) {
       await Sell().makePayment(payments, sellId);
     }
 
@@ -495,15 +505,19 @@ class _PosSinglePageState extends State<PosSinglePage> {
       systemRepo: SystemRepo(),
       contactRepo: ContactRepo(),
       cartRepo: CartRepo(),
-      taxRate: 0, // TODO: load from System()
+      taxRate: 0,
     );
     controller.init();
+    // Put cursor in the search box on first paint
+    WidgetsBinding.instance.addPostFrameCallback((_) => _focusSearch());
   }
 
   @override
   void dispose() {
     _debounce?.cancel();
     _searchCtrl.dispose();
+    _customerFieldCtrl.dispose();
+    _searchFocus.dispose();
     controller.dispose();
     super.dispose();
   }
@@ -552,6 +566,8 @@ class _PosSinglePageState extends State<PosSinglePage> {
         child: Column(children: [
           TextField(
             controller: _searchCtrl,
+            focusNode: _searchFocus,
+            autofocus: true,
             decoration: InputDecoration(
               hintText: 'Search products',
               prefixIcon: const Icon(Icons.search),
@@ -569,11 +585,56 @@ class _PosSinglePageState extends State<PosSinglePage> {
                   OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
             ),
             onChanged: (v) {
-              controller.searchTerm = v;
+              controller.searchTerm = v.trim();
               _debounce?.cancel();
-              _debounce = Timer(
-                  const Duration(milliseconds: 300), controller.loadProducts);
+              _debounce = Timer(const Duration(milliseconds: 300), () async {
+                // Refresh results
+                await controller.loadProducts();
+
+                // If exactly one product matches, add it and clear the search
+                if (_searchCtrl.text.isNotEmpty &&
+                    controller.products.length == 1) {
+                  final p = controller.products.first;
+
+                  // respect stock (same rule as your card tap)
+                  final isOut = p.enableStock && p.stockAvailable <= 0;
+                  if (!isOut) {
+                    await controller.addOrIncrease(p);
+
+                    // clear search & reload product grid
+                    _searchCtrl.clear();
+                    controller.searchTerm = '';
+                    await controller.loadProducts();
+
+                    if (mounted) {
+                      setState(() {});
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('Added "${p.displayName}" to cart'),
+                          duration: const Duration(seconds: 1),
+                        ),
+                      );
+                    }
+                  }
+                }
+              });
+
               setState(() {});
+            },
+            onSubmitted: (_) async {
+              _debounce?.cancel();
+              await controller.loadProducts();
+              if (controller.products.length == 1) {
+                final p = controller.products.first;
+                final isOut = p.enableStock && p.stockAvailable <= 0;
+                if (!isOut) {
+                  await controller.addOrIncrease(p);
+                  _searchCtrl.clear();
+                  controller.searchTerm = '';
+                  await controller.loadProducts();
+                  if (mounted) setState(() {});
+                }
+              }
             },
           ),
           const SizedBox(height: 12),
@@ -645,6 +706,26 @@ class _PosSinglePageState extends State<PosSinglePage> {
             : _buildProductsGrid(),
       ),
     ]);
+  }
+
+  final FocusNode _searchFocus = FocusNode();
+
+  void _focusSearch({bool selectAll = false}) {
+    if (!mounted) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _searchFocus.requestFocus();
+      if (selectAll) {
+        _searchCtrl.selection =
+            TextSelection(baseOffset: 0, extentOffset: _searchCtrl.text.length);
+      }
+    });
+  }
+
+  void _clearSearchAndFocus() {
+    _searchCtrl.clear();
+    controller.searchTerm = '';
+    _focusSearch();
+    if (mounted) setState(() {}); // refresh suffixIcon state, etc.
   }
 
   Widget _buildProductsGrid() {
@@ -774,19 +855,16 @@ class _PosSinglePageState extends State<PosSinglePage> {
       ),
       Padding(
         padding: const EdgeInsets.all(16),
-        child: DropdownButtonFormField<PosCustomerModel?>(
-          value: controller.selectedCustomer,
+        child: TextFormField(
+          controller: _customerFieldCtrl,
+          readOnly: true,
           decoration: const InputDecoration(
-              labelText: 'Customer',
-              border: OutlineInputBorder(),
-              prefixIcon: Icon(Icons.person)),
-          items: controller.customers
-              .map((c) => DropdownMenuItem(value: c, child: Text(c.name)))
-              .toList(),
-          onChanged: (c) {
-            controller.selectedCustomer = c;
-            controller.notifyListeners();
-          },
+            labelText: 'Customer',
+            border: OutlineInputBorder(),
+            prefixIcon: Icon(Icons.person),
+            suffixIcon: Icon(Icons.arrow_drop_down),
+          ),
+          onTap: _openCustomerPicker, // 👈 open the searchable sheet
         ),
       ),
       Expanded(
@@ -800,6 +878,92 @@ class _PosSinglePageState extends State<PosSinglePage> {
       ),
       _summary(),
     ]);
+  }
+
+  final TextEditingController _customerFieldCtrl =
+      TextEditingController(text: 'Walk-in customer');
+
+  Future<void> _openCustomerPicker() async {
+    final picked = await showModalBottomSheet<PosCustomerModel>(
+      context: context,
+      isScrollControlled: true,
+      enableDrag: true,
+      backgroundColor: themeData.cardColor, // 👈 solid sheet color
+      barrierColor: Colors.black.withOpacity(0.12), // soft dim; no blur
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        String query = '';
+        return StatefulBuilder(builder: (ctx, setState) {
+          final list = (query.trim().isEmpty)
+              ? controller.customers
+              : controller.customers.where((c) {
+                  final q = query.toLowerCase();
+                  // match by name or id
+                  return c.name.toLowerCase().contains(q) ||
+                      c.id.toString().contains(q);
+                }).toList();
+
+          return SafeArea(
+            child: Padding(
+              padding:
+                  EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SizedBox(height: 12),
+                  Container(
+                      width: 40,
+                      height: 4,
+                      decoration: BoxDecoration(
+                          color: Colors.black26,
+                          borderRadius: BorderRadius.circular(2))),
+                  const SizedBox(height: 12),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: TextField(
+                      autofocus: true,
+                      decoration: const InputDecoration(
+                        hintText: 'Search customers…',
+                        prefixIcon: Icon(Icons.search),
+                        border: OutlineInputBorder(),
+                      ),
+                      onChanged: (v) => setState(() => query = v),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Flexible(
+                    child: ListView.separated(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      shrinkWrap: true,
+                      itemCount: list.length,
+                      separatorBuilder: (_, __) => const Divider(height: 1),
+                      itemBuilder: (_, i) {
+                        final c = list[i];
+                        return ListTile(
+                          title: Text(c.name),
+                          subtitle: Text('ID: ${c.id}'),
+                          onTap: () => Navigator.of(ctx).pop(c),
+                        );
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                ],
+              ),
+            ),
+          );
+        });
+      },
+    );
+
+    if (picked != null) {
+      controller.selectedCustomer = picked;
+      _customerFieldCtrl.text = picked.name; // update field text
+      controller.notifyListeners();
+      _focusSearch();
+    }
   }
 
   Widget _emptyCart() => Center(
@@ -1017,6 +1181,7 @@ class _PosSinglePageState extends State<PosSinglePage> {
     // Print in a separate try/catch so we can show a correct message
     try {
       await _printInvoice(sellId!);
+      _clearSearchAndFocus();
     } catch (e, st) {
       debugPrint('PRINT FAILED: $e\n$st');
       if (!mounted) return;
@@ -1028,29 +1193,266 @@ class _PosSinglePageState extends State<PosSinglePage> {
     }
   }
 
+  // Supported methods (adjust to match your backend names if needed)
+  // Supported methods — adjust to match your backend if needed
+  final List<String> _paymentMethods = const [
+    'cash',
+    'card',
+    'bank_transfer',
+    'cheque',
+    'mobile',
+  ];
+
+  Future<List<Map<String, dynamic>>?> _openPaymentsDialog({
+    required double total,
+    required bool allowPartial,
+  }) async {
+    // Start with one empty row for Debit flow
+    List<Map<String, dynamic>> rows = [
+      {'method': 'cash', 'amount': 0.0, 'note': 'POS', 'account_id': null},
+    ];
+
+    double _sumPaid() =>
+        rows.fold<double>(0.0, (s, r) => s + (_asDouble(r['amount'], 0.0)));
+
+    String? _validate() {
+      for (final r in rows) {
+        final a = _asDouble(r['amount'], -1);
+        if (a < 0) return 'Amounts must be 0 or greater.';
+      }
+      final paid = _sumPaid();
+      if (paid - total > 0.01) return 'Paid exceeds total.';
+      if (!allowPartial && total - paid > 0.01) {
+        return 'Paid must cover the total.';
+      }
+      return null;
+    }
+
+    return showDialog<List<Map<String, dynamic>>>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        return StatefulBuilder(builder: (ctx, setState) {
+          final paid = _sumPaid();
+          final remaining = (total - paid).clamp(0.0, double.infinity);
+          final error = _validate();
+
+          void addRow() {
+            setState(() {
+              rows.add({
+                'method': 'cash',
+                'amount': 0.0,
+                'note': '',
+                'account_id': null
+              });
+            });
+          }
+
+          void removeRow(int i) {
+            setState(() {
+              if (rows.length > 1) rows.removeAt(i);
+            });
+          }
+
+          void fillRemainder(int i) {
+            setState(() {
+              final current = _asDouble(rows[i]['amount'], 0);
+              rows[i]['amount'] = current + remaining;
+            });
+          }
+
+          Widget rowTile(int i) {
+            final r = rows[i];
+            final method = (r['method'] as String?) ?? 'cash';
+            final amt = _asDouble(r['amount'], 0.0);
+            final note = (r['note'] as String?) ?? '';
+
+            return Card(
+              margin: const EdgeInsets.only(bottom: 8),
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(children: [
+                  Row(children: [
+                    Expanded(
+                      flex: 4,
+                      child: DropdownButtonFormField<String>(
+                        value: method,
+                        items: _paymentMethods
+                            .map((m) => DropdownMenuItem(
+                                value: m, child: Text(m.toUpperCase())))
+                            .toList(),
+                        decoration: const InputDecoration(
+                          labelText: 'Method',
+                          border: OutlineInputBorder(),
+                        ),
+                        onChanged: (v) =>
+                            setState(() => r['method'] = v ?? 'cash'),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      flex: 3,
+                      child: TextFormField(
+                        initialValue: amt == 0
+                            ? ''
+                            : amt.toStringAsFixed(Config.quantityPrecision),
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true),
+                        decoration: InputDecoration(
+                          labelText: 'Amount',
+                          border: const OutlineInputBorder(),
+                          suffixIcon: IconButton(
+                            tooltip: 'Fill remainder',
+                            onPressed:
+                                remaining > 0 ? () => fillRemainder(i) : null,
+                            icon: const Icon(Icons.add),
+                          ),
+                        ),
+                        onChanged: (v) {
+                          final parsed = double.tryParse(v.trim()) ?? 0.0;
+                          setState(() => r['amount'] = parsed);
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton(
+                      onPressed: rows.length > 1 ? () => removeRow(i) : null,
+                      icon: const Icon(Icons.delete_outline, color: Colors.red),
+                    ),
+                  ]),
+                  const SizedBox(height: 8),
+                  TextFormField(
+                    initialValue: note,
+                    decoration: const InputDecoration(
+                      labelText: 'Note (optional)',
+                      border: OutlineInputBorder(),
+                    ),
+                    onChanged: (v) => setState(() => r['note'] = v),
+                  ),
+                ]),
+              ),
+            );
+          }
+
+          return AlertDialog(
+            title: const Text('Take Payment (Partial allowed)'),
+            content: SizedBox(
+              width: 480,
+              child: SingleChildScrollView(
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text('Total: ${_fmt(total)}'),
+                    ),
+                  ),
+                  ...List.generate(rows.length, rowTile),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      onPressed: addRow,
+                      icon: const Icon(Icons.add),
+                      label: const Text('Add payment'),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('Paid: ${_fmt(paid)}'),
+                      Text('Remaining: ${_fmt(remaining)}'),
+                    ],
+                  ),
+                  if (error != null) ...[
+                    const SizedBox(height: 8),
+                    Text(error, style: const TextStyle(color: Colors.red)),
+                  ],
+                ]),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(null),
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed:
+                    error == null ? () => Navigator.of(ctx).pop(rows) : null,
+                child: const Text('Save'),
+              ),
+            ],
+          );
+        });
+      },
+    );
+  }
+
   Future<void> _saveDebit() async {
     if (controller.cart.isEmpty) return;
 
+    // Allow 0 (full debit) or partial
+    final paymentRows = await _openPaymentsDialog(
+      total: controller.total,
+      allowPartial: true,
+    );
+    if (paymentRows == null) return; // cancelled
+
+    final double paid = paymentRows.fold<double>(
+      0.0,
+      (s, r) => s + _asDouble(r['amount'], 0.0),
+    );
+
+    final bool isFullyPaid = paid >= controller.total - 1e-6;
+    final bool markAsDebit = !isFullyPaid; // debit/partial if not full
+
     setState(() => _saving = true);
     try {
-      final customerId =
-          controller.selectedCustomer?.id ?? 1; // Walk-in default
+      final customerId = controller.selectedCustomer?.id ?? 1; // Walk-in
+
+      // Normalize notes and fields
+      final normalized = paymentRows
+          .map((p) {
+            return {
+              'method': p['method'],
+              'amount': _asDouble(p['amount'], 0.0),
+              'note': (p['note'] as String?)?.trim().isEmpty == true
+                  ? 'App'
+                  : p['note'],
+              'account_id':
+                  p['account_id'], // keep null unless you map accounts
+            };
+          })
+          .where((p) => _asDouble(p['amount'], 0.0) > 0)
+          .toList();
 
       final sellId = await controller.saveSale(
         customerId: customerId,
         discountType: 'fixed',
-        payments: const [], // 👈 NO payment lines
-        asDebit: true, // 👈 mark as debit (pending)
+        payments: normalized, // MULTI payments
+        asDebit: markAsDebit,
       );
+
+      final String statusText =
+          (paid <= 0) ? 'DEBIT' : (isFullyPaid ? 'PAID' : 'PARTIAL');
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-            content: Text('Sale saved (DEBIT) (#$sellId)'),
-            backgroundColor: Colors.green),
+          content: Text(
+            'Sale saved ($statusText) (#$sellId) '
+            'Paid: ${_fmt(paid)}  |  Pending: ${_fmt((controller.total - paid).clamp(0, double.infinity))}',
+          ),
+          backgroundColor: isFullyPaid
+              ? Colors.green
+              : (paid > 0 ? Colors.blue : Colors.orange),
+        ),
       );
+
       await _printInvoice(sellId);
-    } catch (e) {
+      _clearSearchAndFocus();
+    } catch (e, st) {
+      debugPrint('SAVE FAILED: $e\n$st');
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -1062,25 +1464,80 @@ class _PosSinglePageState extends State<PosSinglePage> {
     }
   }
 
+  // In _PosSinglePageState (same file)
+
+// Helper: prompt for amount paid
+  Future<double?> _askPaidAmount(double total) async {
+    final ctrl = TextEditingController(text: '0');
+    return await showDialog<double>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          title: const Text('Amount paid'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Total: ${_fmt(controller.total)}'),
+              const SizedBox(height: 8),
+              TextField(
+                controller: ctrl,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(
+                  labelText: 'Enter amount',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(null),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () {
+                final v = double.tryParse(ctrl.text.trim());
+                if (v == null || v < 0) {
+                  Navigator.of(ctx).pop(0.0);
+                } else {
+                  // Cap to total (no overpay)
+                  final paid = v > total ? total : v;
+                  Navigator.of(ctx).pop(paid);
+                }
+              },
+              child: const Text('OK'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   Future<void> _printInvoice(int sellId) async {
     const taxId = 0;
+
+    // 1) Build your LOCAL HTML (no remote calls)
     final html =
         await InvoiceFormatter().generateInvoice(sellId, taxId, context);
 
-    // Optional: save HTML for debugging (non-web only)
-    if (!kIsWeb) {
-      try {
-        final dir = await getTemporaryDirectory();
-        final f = File('${dir.path}/invoice-$sellId.html');
-        await f.writeAsString(html);
-        debugPrint('Invoice HTML saved to: ${f.path}');
-      } catch (e) {
-        debugPrint('Could not save invoice HTML: $e');
-      }
-    }
-
+    // 2) Print the HTML via Printing (native print dialog)
     await Printing.layoutPdf(
-      onLayout: (format) => Printing.convertHtml(html: html, format: format),
+      onLayout: (format) async {
+        // Optional: target thermal paper width (80mm or 58mm).
+        // Comment this out if you want default A4.
+        final pageFormat = PdfPageFormat(
+          80 * PdfPageFormat.mm, // ← 80mm roll (use 58 * mm for 58mm)
+          500 * PdfPageFormat.mm, // tall enough to fit most receipts
+          marginAll: 4, // small margins
+        );
+
+        return await Printing.convertHtml(
+          html: html,
+          format: pageFormat, // use your roll width
+        );
+      },
     );
   }
 }

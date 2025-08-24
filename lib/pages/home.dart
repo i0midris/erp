@@ -209,7 +209,7 @@ class _HomeState extends State<Home> {
       body: SingleChildScrollView(
         child: Column(
           children: <Widget>[
-            GreetingWidget(themeData: themeData,userName: userName),
+            GreetingWidget(themeData: themeData, userName: userName),
             Statistics(
               themeData: themeData,
               businessSymbol: businessSymbol,
@@ -1013,7 +1013,3 @@ class _HomeState extends State<Home> {
     });
   }
 }
-
-
-
-

@@ -1,3 +1,5 @@
+// lib/models/invoice.dart
+
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -11,579 +13,494 @@ import '../models/sellDatabase.dart';
 import '../models/system.dart';
 import 'contact_model.dart';
 
+/// ---------- Safe helpers ----------
+String _toAsciiDigits(String s) {
+  // Arabic & Persian digits -> ASCII
+  const map = {
+    '٠': '0',
+    '١': '1',
+    '٢': '2',
+    '٣': '3',
+    '٤': '4',
+    '٥': '5',
+    '٦': '6',
+    '٧': '7',
+    '٨': '8',
+    '٩': '9',
+    '۰': '0',
+    '۱': '1',
+    '۲': '2',
+    '۳': '3',
+    '۴': '4',
+    '۵': '5',
+    '۶': '6',
+    '۷': '7',
+    '۸': '8',
+    '۹': '9',
+  };
+  for (final e in map.entries) {
+    s = s.replaceAll(e.key, e.value);
+  }
+  return s;
+}
+
+double _toDouble(Object? v, [double def = 0]) {
+  if (v == null) return def;
+  if (v is num) return v.toDouble();
+  var s = _toAsciiDigits(v.toString().trim());
+  s = s.replaceAll('\u066B', '.'); // Arabic decimal sep
+  s = s.replaceAll(RegExp(r'[,\u066C]'), ''); // thousands (comma, Arabic)
+  return double.tryParse(s) ?? def;
+}
+
+DateTime _parseDateSafe(Object? v) {
+  if (v is DateTime) return v;
+  var s = _toAsciiDigits((v ?? '').toString().trim())
+      .replaceAll('/', '-')
+      .replaceAll('\u200f', '')
+      .replaceAll('\u202A', '')
+      .replaceAll('\u202C', '');
+  final iso = DateTime.tryParse(s);
+  if (iso != null) return iso;
+  for (final p in const [
+    'yyyy-MM-dd HH:mm:ss',
+    'yyyy-MM-dd HH:mm',
+    'yyyy-MM-dd',
+    'dd-MM-yyyy HH:mm:ss',
+    'dd-MM-yyyy HH:mm',
+    'dd-MM-yyyy',
+  ]) {
+    try {
+      return DateFormat(p, 'en').parse(s);
+    } catch (_) {}
+  }
+  return DateTime.now();
+}
+
+/// ===================================
+
 class InvoiceFormatter {
   double subTotal = 0;
-  var taxName = 'taxRates';
+  String taxName = 'taxRates';
   double inlineDiscountAmount = 0.0, inlineTaxAmount = 0.0, tax = 0;
 
+  Future<void> _loadTax(dynamic taxId) async {
+    if (taxId == null) {
+      taxName = 'taxRates';
+      tax = 0;
+      return;
+    }
+    final list = await System().get('tax');
+    for (final element in list) {
+      if (element['id'] == taxId) {
+        taxName = element['name']?.toString() ?? 'tax';
+        tax = _toDouble(element['amount']);
+        break;
+      }
+    }
+  }
+
   Future<String> generateProductDetails(sellId, context) async {
-    //fetch products from sellLine by sellId
-    List products = await SellDatabase().get(sellId: sellId);
-    String product = '''
-          <tr class="bb-lg">
-               
-               <th width="30%">
-                     <p>${AppLocalizations.of(context).translate('products')}</p>
-               </th>
-               
-               <th width="20%">
-                     <p>${AppLocalizations.of(context).translate('quantity')}</p>
-               </th>
-               
-               <th width="20%">
-                     <p>${AppLocalizations.of(context).translate('unit_price')}</p>
-               </th>
-               
-               <th width="20%">
-                     <p>${AppLocalizations.of(context).translate('sub_total')}</p>
-               </th>
-               
-            </tr>
+    // Reset numbers for this invoice
+    subTotal = 0.0;
+    inlineDiscountAmount = 0.0;
+    inlineTaxAmount = 0.0;
+
+    // Fetch lines
+    final List products = await SellDatabase().get(sellId: sellId);
+
+    String rows = '''
+      <tr class="bb-lg">
+         <th width="30%"><p>${AppLocalizations.of(context).translate('products')}</p></th>
+         <th width="20%"><p>${AppLocalizations.of(context).translate('quantity')}</p></th>
+         <th width="20%"><p>${AppLocalizations.of(context).translate('unit_price')}</p></th>
+         <th width="20%"><p>${AppLocalizations.of(context).translate('sub_total')}</p></th>
+      </tr>
     ''';
-    subTotal = 0.00;
+
     for (int i = 0; i < products.length; i++) {
-      String serialNumber = (i + 1).toString();
-      String productName = products[i]['name'];
-      String productSku = products[i]['sub_sku'];
-      String productQuantity = products[i]['quantity'].toString();
-      Map<String, dynamic> inlineAmounts = await Helper()
-          .calculateTaxAndDiscount(
-              discountAmount: products[i]['discount_amount'],
-              discountType: products[i]['discount_type'],
-              unitPrice: products[i]['unit_price'],
-              taxId: products[i]['tax_rate_id']);
-      inlineDiscountAmount += inlineAmounts['discountAmount'];
-      inlineTaxAmount += inlineAmounts['taxAmount'];
-      String productPrice = await Helper().calculateTotal(
-          taxId: products[i]['tax_rate_id'],
-          discountAmount: products[i]['discount_amount'],
-          discountType: products[i]['discount_type'],
-          unitPrice: products[i]['unit_price']);
-      String totalProductsPrice =
-          (products[i]['quantity'] * double.parse(productPrice)).toString();
-      subTotal += double.parse(totalProductsPrice);
-      product = product +
-          '''
-          <tr class="bb-lg">
-          
-               <td width="30%">               
-                     <p>$productName, $productSku</p>
-               </td>
-               
-               
-               <td  width="20%">               
-                     <p>${Helper().formatQuantity(productQuantity)}</p>
-               </td>
-               
-               
-               <td width="20%">               
-                     <p>${Helper().formatCurrency(productPrice)}</p>
-               </td>
-               
-               <td width="20%">               
-                     <p>${Helper().formatCurrency(totalProductsPrice)}</p>
-               </td>
-               
-            </tr>
-    ''';
+      final name = products[i]['name']?.toString() ?? '';
+      final sku = products[i]['sub_sku']?.toString() ?? '';
+
+      // quantity (string for formatter + numeric for math)
+      final qtyStr = products[i]['quantity'].toString();
+      final qtyNum = _toDouble(products[i]['quantity']);
+
+      // per-line inline tax/discount calculation
+      final inlineAmounts = await Helper().calculateTaxAndDiscount(
+        discountAmount: products[i]['discount_amount'],
+        discountType: products[i]['discount_type'],
+        unitPrice: products[i]['unit_price'],
+        taxId: products[i]['tax_rate_id'],
+      );
+      inlineDiscountAmount += _toDouble(inlineAmounts['discountAmount']);
+      inlineTaxAmount += _toDouble(inlineAmounts['taxAmount']);
+
+      // Unit price including its inline tax/discount (your helper returns a string)
+      final unitPriceStr = await Helper().calculateTotal(
+        taxId: products[i]['tax_rate_id'],
+        discountAmount: products[i]['discount_amount'],
+        discountType: products[i]['discount_type'],
+        unitPrice: products[i]['unit_price'],
+      );
+      final unitPrice = _toDouble(unitPriceStr);
+
+      final lineTotal = qtyNum * unitPrice;
+      subTotal += lineTotal;
+
+      rows += '''
+        <tr class="bb-lg">
+          <td width="30%"><p>$name, $sku</p></td>
+          <td width="20%"><p>${Helper().formatQuantity(qtyStr)}</p></td>
+          <td width="20%"><p>${Helper().formatCurrency(unitPrice)}</p></td>
+          <td width="20%"><p>${Helper().formatCurrency(lineTotal)}</p></td>
+        </tr>
+      ''';
     }
-    return product;
+
+    return rows;
   }
 
-  setTax(taxId) {
-    System().get('tax').then((value) {
-      value.forEach((element) {
-        if (element['id'] == taxId) {
-          taxName = element['name'];
-          tax = double.parse(element['amount'].toString());
-        }
-      });
-    });
-  }
-
-  Map<String, dynamic> getTotalAmount(
-      {required String discountType,
-      required double discountAmount,
-      required String symbol}) {
-    Map<String, dynamic> allAmounts = {};
-    if (discountType == "fixed") {
-      discountType = "$symbol $discountAmount";
-      String tAmount = (subTotal - discountAmount).toString();
-      allAmounts['taxAmount'] = Helper().formatCurrency(
-          (double.parse(tAmount) * (tax / 100)).toStringAsFixed(2));
-      allAmounts['totalAmount'] =
-          (double.parse(tAmount) + double.parse(allAmounts['taxAmount']))
-              .toString();
-      allAmounts['discountAmount'] = discountAmount;
-      allAmounts['discountType'] = discountType;
-    } else if (discountType == "percentage") {
-      discountType = discountAmount.toString() + " %";
-      discountAmount = subTotal * (discountAmount / 100);
-      String tAmount = (subTotal - discountAmount).toString();
-      allAmounts['taxAmount'] = Helper().formatCurrency(
-          (double.parse(tAmount) * (tax / 100)).toStringAsFixed(2));
-      allAmounts['totalAmount'] =
-          (double.parse(tAmount) + double.parse(allAmounts['taxAmount']))
-              .toStringAsFixed(2);
-      allAmounts['discountAmount'] = discountAmount;
-      allAmounts['discountType'] = discountType;
+  /// Returns numeric amounts; only format at render.
+  Map<String, dynamic> getTotalAmount({
+    required String discountType,
+    required double discountAmount,
+    required String symbol, // kept to preserve label text
+  }) {
+    final out = <String, dynamic>{};
+    double tAmount;
+    if (discountType == 'fixed') {
+      tAmount = subTotal - discountAmount;
+      out['discountAmount'] = discountAmount;
+      out['discountType'] = "$symbol $discountAmount";
+    } else if (discountType == 'percentage') {
+      final disc = subTotal * (discountAmount / 100.0);
+      tAmount = subTotal - disc;
+      out['discountAmount'] = disc;
+      out['discountType'] = "$discountAmount %";
+    } else {
+      tAmount = subTotal;
+      out['discountAmount'] = 0.0;
+      out['discountType'] = '';
     }
-    return allAmounts;
+
+    final taxAmount = tAmount * (tax / 100.0);
+    out['taxAmount'] = taxAmount;
+    out['totalAmount'] = tAmount + taxAmount;
+    return out;
   }
 
   Future<String> generateInvoice(sellId, taxId, context) async {
-    var symbol = '';
-    var businessName = '';
-    String taxHtml = '';
-    String inlineTaxesHtml = '';
-    String inlineDiscountHtml = '';
-    String discountHtml = '';
-    String dueHtml = '';
-    String shippingHtml = '';
-    String taxLabel = '';
-    String taxNumber = '';
-    setTax(taxId);
-    String products = await generateProductDetails(sellId, context);
-    List sells = await SellDatabase().getSellBySellId(sellId);
-    var customer =
-        await Contact().getCustomerDetailById(sells[0]['contact_id']);
-    var landmark = '',
-        city = '',
-        state = '',
-        zipCode = '',
-        country = '',
-        businessMobile = '';
-    List locations = await System().get('location');
-    var location;
-    locations.forEach((element) {
-      if (element['id'] == sells[0]['location_id']) {
-        location = element;
-        landmark =
-            (location['landmark'] != null) ? location['landmark'] + ',' : '';
-        city = (location['city'] != null) ? location['city'] + ',' : '';
-        state = (location['state'] != null) ? location['state'] + ',' : '';
-        zipCode =
-            (location['zip_code'] != null) ? location['zip_code'] + ',' : '';
-        country =
-            (location['country'] != null) ? location['country'] + ',' : '';
-        businessMobile =
-            (location['mobile'] != null) ? location['mobile'] + ',' : '';
+    await _loadTax(taxId);
+
+    // Build product table & collect totals
+    final productsHtml = await generateProductDetails(sellId, context);
+
+    // Core data
+    final List sells = await SellDatabase().getSellBySellId(sellId);
+    final sell = sells.first;
+
+    final customer = await Contact().getCustomerDetailById(sell['contact_id']);
+
+    // Location details
+    final List locations = await System().get('location');
+    Map<String, dynamic>? location;
+    for (final e in locations) {
+      if (e['id'] == sell['location_id']) {
+        location = Map<String, dynamic>.from(e);
+        break;
       }
-    });
-    String invoiceNo = sells[0]['invoice_no'];
-    var dateTime = DateTime.parse(sells[0]['transaction_date']);
-    var date = DateFormat("dd/MM/yyyy").format(dateTime);
-    var discountType = sells[0]['discount_type'];
-    var discountAmount = sells[0]['discount_amount'];
-    await Helper().getFormattedBusinessDetails().then((value) {
-      symbol = value['symbol'];
-      businessName = value['name'];
-      taxLabel = value['taxLabel'];
-      taxNumber = value['taxNumber'];
-    });
-    var customerName = customer['name'];
-    var customerAddress1 = (customer['address_line_1'] != null)
-        ? customer['address_line_1'] + ','
-        : '';
-    var customerAddress2 = (customer['address_line_2'] != null)
-        ? customer['address_line_2'] + ','
-        : '';
-    var customerCity = (customer['city'] != null) ? customer['city'] + ',' : '';
-    var customerState =
-    (customer['state'] != null) ? customer['state'] + ',' : '';
-    var customerCountry =
-    (customer['country'] != null) ? customer['country'] : '';
-    var customerMobile = customer['mobile'];
-    List paymentList =
-    await PaymentDatabase().get(sells[0]['id'], allColumns: true);
+    }
+
+    final landmark = (location?['landmark'] ?? '').toString().trim();
+    final city = (location?['city'] ?? '').toString().trim();
+    final state = (location?['state'] ?? '').toString().trim();
+    final zipCode = (location?['zip_code'] ?? '').toString().trim();
+    final country = (location?['country'] ?? '').toString().trim();
+    final businessMobile = (location?['mobile'] ?? '').toString().trim();
+
+    final invoiceNo = sell['invoice_no']?.toString() ?? '';
+    final dateTime = _parseDateSafe(sell['transaction_date']);
+    final dateStr = DateFormat("dd/MM/yyyy").format(dateTime);
+
+    // Business details
+    final biz = await Helper().getFormattedBusinessDetails();
+    final symbol = (biz['symbol'] ?? '').toString();
+    final business = (biz['name'] ?? '').toString();
+    final taxLabel = (biz['taxLabel'] ?? '').toString();
+    final taxNumber = (biz['taxNumber'] ?? '').toString();
+
+    // Customer details
+    final customerName = (customer['name'] ?? '').toString();
+    final customerAddress1 =
+        (customer['address_line_1'] ?? '').toString().trim();
+    final customerAddress2 =
+        (customer['address_line_2'] ?? '').toString().trim();
+    final customerCity = (customer['city'] ?? '').toString().trim();
+    final customerState = (customer['state'] ?? '').toString().trim();
+    final customerCountry = (customer['country'] ?? '').toString().trim();
+    final customerMobile = (customer['mobile'] ?? '').toString().trim();
+
+    // Payments
+    final List paymentList =
+        await PaymentDatabase().get(sell['id'], allColumns: true);
     double totalPaidAmount = 0.0;
-    String payments = '';
-    paymentList.forEach((element) {
-      var sign;
-      if (element['is_return'] == 0) {
-        sign = '+';
-        totalPaidAmount += element['amount'];
-      } else {
-        sign = '-';
-        totalPaidAmount -= element['amount'];
-      }
-      var method = element['method'];
-      var paidAmount = element['amount'];
-      if (element['amount'] > 0) {
-        payments += '''
+    String paymentsHtml = '';
+    for (final element in paymentList) {
+      final amt = _toDouble(element['amount']);
+      if (amt <= 0) continue;
+      final isReturn = element['is_return'] == 1;
+      final sign = isReturn ? '-' : '+';
+      totalPaidAmount += isReturn ? -amt : amt;
+      final method = element['method']?.toString() ?? '';
+      paymentsHtml += '''
         <div class="flex-box">
-         <p class="width-50 text-left">$method ($sign) ($date) </p>
-         <p class="width-50 text-right">$symbol ${Helper().formatCurrency(paidAmount)}</p>
-      </div>
+          <p class="width-50 text-left">$method ($sign) ($dateStr)</p>
+          <p class="width-50 text-right">$symbol ${Helper().formatCurrency(amt)}</p>
+        </div>
       ''';
-      }
-    });
-
-    Map<String, dynamic> getAmounts = getTotalAmount(
-        discountType: discountType,
-        discountAmount: discountAmount,
-        symbol: symbol);
-
-    discountAmount = getAmounts['discountAmount'];
-    discountType = getAmounts['discountType'];
-    String taxAmount = getAmounts['taxAmount'];
-    String totalAmount =
-        (double.parse(getAmounts['totalAmount']) + sells[0]['shipping_charges'])
-            .toStringAsFixed(2);
-    String sTotal = subTotal.toString();
-    var totalReceived;
-    var returnAmount;
-    var dueAmount;
-    if (totalPaidAmount > double.parse(totalAmount)) {
-      returnAmount = totalPaidAmount - double.parse(totalAmount);
-      totalReceived = totalAmount;
-      dueAmount = 0.00;
-    } else if (double.parse(totalAmount) > totalPaidAmount) {
-      dueAmount = double.parse(totalAmount) - totalPaidAmount;
-      returnAmount = 0.00;
-    } else {
-      dueAmount = 0.00;
-      returnAmount = 0.00;
     }
-    returnAmount = Helper().formatCurrency(returnAmount);
-    totalAmount = Helper().formatCurrency(totalAmount);
-    totalReceived = Helper().formatCurrency(totalPaidAmount);
 
-    //structure of discount row
+    // Totals (numeric)
+    var discountType = (sell['discount_type'] ?? '').toString();
+    var discountAmount = _toDouble(sell['discount_amount']);
+
+    final amounts = getTotalAmount(
+      discountType: discountType,
+      discountAmount: discountAmount,
+      symbol: symbol,
+    );
+
+    discountAmount = _toDouble(amounts['discountAmount']);
+    discountType = amounts['discountType']?.toString() ?? '';
+    final taxAmountNum = _toDouble(amounts['taxAmount']);
+    final shipping = _toDouble(sell['shipping_charges']);
+    final totalAmountNum = _toDouble(amounts['totalAmount']) + shipping;
+    final sTotalNum = subTotal;
+
+    // Due/Return logic
+    double totalReceivedNum = totalPaidAmount;
+    double returnAmountNum = 0.0;
+    double dueAmountNum = 0.0;
+
+    if (totalPaidAmount > totalAmountNum) {
+      returnAmountNum = totalPaidAmount - totalAmountNum;
+      totalReceivedNum = totalAmountNum;
+    } else if (totalAmountNum > totalPaidAmount) {
+      dueAmountNum = totalAmountNum - totalPaidAmount;
+    }
+
+    // Build optional rows
+    String discountHtml = '';
     if (discountAmount > 0) {
-      discountAmount = Helper().formatCurrency(discountAmount);
       discountHtml = '''
-      <div class="flex-box">
-         <p class="width-50 text-left">
+        <div class="flex-box">
+          <p class="width-50 text-left">
             ${AppLocalizations.of(context).translate('discount')} <small>($discountType)</small> :
-         </p>
-         <p class="width-50 text-right">
-            (-) $symbol $discountAmount
-         </p>
-      </div>
+          </p>
+          <p class="width-50 text-right">(-) $symbol ${Helper().formatCurrency(discountAmount)}</p>
+        </div>
       ''';
     }
 
-    //structure of inline discount row
+    String inlineDiscountHtml = '';
     if (inlineDiscountAmount > 0) {
-      String inlineDiscount = Helper().formatCurrency(inlineDiscountAmount);
       inlineDiscountHtml = '''
-      <div class="flex-box">
-         <p class="width-50 text-left">
-            ${AppLocalizations.of(context).translate('discount')} :
-         </p>
-         <p class="width-50 text-right">
-            (-) $symbol $inlineDiscount
-         </p>
-      </div>
+        <div class="flex-box">
+          <p class="width-50 text-left">${AppLocalizations.of(context).translate('discount')} :</p>
+          <p class="width-50 text-right">(-) $symbol ${Helper().formatCurrency(inlineDiscountAmount)}</p>
+        </div>
       ''';
     }
 
-    //structure of shippingCharge row
-    if (sells[0]['shipping_charges'] >= 0.01) {
-      shippingHtml += '''
-      <div class="flex-box">
-         <p class="width-50 text-left">
-            ${AppLocalizations.of(context).translate('shipping_charges')}:
-         </p>
-         <p class="width-50 text-right">
-            $symbol ${Helper().formatCurrency(sells[0]['shipping_charges'])}
-         </p>
-      </div>
+    String shippingHtml = '';
+    if (shipping >= 0.01) {
+      shippingHtml = '''
+        <div class="flex-box">
+          <p class="width-50 text-left">${AppLocalizations.of(context).translate('shipping_charges')}:</p>
+          <p class="width-50 text-right">$symbol ${Helper().formatCurrency(shipping)}</p>
+        </div>
       ''';
     }
 
-    //structure of tax row
-    if (taxName != "taxRates") {
+    String taxHtml = '';
+    if (taxName != 'taxRates') {
       taxHtml = '''
-      <div class="flex-box">
-         <p class="width-50 text-left">
-            ${AppLocalizations.of(context).translate('tax')} ($taxName):
-         </p>
-         <p class="width-50 text-right">
-            (+) $symbol $taxAmount
-         </p>
-      </div>
+        <div class="flex-box">
+          <p class="width-50 text-left">${AppLocalizations.of(context).translate('tax')} ($taxName):</p>
+          <p class="width-50 text-right">(+) $symbol ${Helper().formatCurrency(taxAmountNum)}</p>
+        </div>
       ''';
     }
 
-    //structure of inline tax row
+    String inlineTaxesHtml = '';
     if (inlineTaxAmount > 0) {
-      String inlineTax = Helper().formatCurrency(inlineTaxAmount);
       inlineTaxesHtml = '''
-      <div class="flex-box">
-         <p class="width-50 text-left">
-            ${AppLocalizations.of(context).translate('tax')} :
-         </p>
-         <p class="width-50 text-right">
-            (+) $symbol $inlineTax
-         </p>
-      </div>
+        <div class="flex-box">
+          <p class="width-50 text-left">${AppLocalizations.of(context).translate('tax')} :</p>
+          <p class="width-50 text-right">(+) $symbol ${Helper().formatCurrency(inlineTaxAmount)}</p>
+        </div>
       ''';
     }
 
-    //structure of due
-    if (dueAmount > 0) {
-      dueAmount = Helper().formatCurrency(dueAmount);
+    String dueHtml = '';
+    if (dueAmountNum > 0) {
       dueHtml = '''
-      <div class="flex-box">
-         <p class="width-50 text-left">
+        <div class="flex-box">
+          <p class="width-50 text-left">
             ${AppLocalizations.of(context).translate('total')} ${AppLocalizations.of(context).translate('due')}
-         </p>
-         <p class="width-50 text-right">
-            $symbol $dueAmount
-         </p>
-      </div>
-    ''';
+          </p>
+          <p class="width-50 text-right">$symbol ${Helper().formatCurrency(dueAmountNum)}</p>
+        </div>
+      ''';
     }
-    String address =
-            "$customerAddress1 $customerAddress2 $customerCity $customerState $customerCountry",
-        totalTax =
-            '${(inlineTaxAmount + double.parse(taxAmount.toString())).toString()}',
-        totalDiscount =
-            '${(inlineDiscountAmount + double.parse(discountAmount.toString())).toString()}';
 
-    // qr code generation
+    // Strings for QR (if you enable it)
+    final addressStr = '${[
+      customerAddress1,
+      customerAddress2,
+      customerCity,
+      customerState,
+      customerCountry
+    ].where((s) => s.isNotEmpty).join(' ')}';
+    final totalTaxStr = (inlineTaxAmount + taxAmountNum).toStringAsFixed(2);
+    final totalDiscountStr =
+        (inlineDiscountAmount + discountAmount).toStringAsFixed(2);
+
+    // --- QR (optional) ---
     // Uint8List qr = await QR().getQrData(
-    //     symbol: symbol,
-    //     address: address,
-    //     businessName: businessName,
-    //     context: context,
-    //     customer: customerName,
-    //     date: dateTime,
-    //     discount: totalDiscount,
-    //     invoiceNo: invoiceNo,
-    //     subTotal: subTotal,
-    //     tax: totalTax,
-    //     taxLabel: taxLabel,
-    //     taxNumber: taxNumber,
-    //     total: totalAmount);
-
+    //   symbol: symbol,
+    //   address: addressStr,
+    //   businessName: business,
+    //   context: context,
+    //   customer: customerName,
+    //   date: dateTime,
+    //   discount: totalDiscountStr,
+    //   invoiceNo: invoiceNo,
+    //   subTotal: sTotalNum,
+    //   tax: totalTaxStr,
+    //   taxLabel: taxLabel,
+    //   taxNumber: taxNumber,
+    //   total: totalAmountNum,
+    // );
     // String base64Image = base64Encode(qr);
 
-    //structure
-    String invoice = '''
-    <section class="invoice print_section" id="receipt_section">
-   <!-- business information here -->
-   <meta charset="UTF-8">
-   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-   <meta http-equiv="X-UA-Compatible" content="ie=edge">
-   <!-- <link rel="stylesheet" href="style.css"> -->
-   <title>Receipt-$invoiceNo</title>
-   <div class="ticket">
-      <div class="text-box">
-         <!-- Logo -->
-         <p class=" centered ">
-            <!-- Header text -->
-            <!-- business information here -->
-            <span class="headings">
-            $businessName
-            </span>
-            <br>
-            $landmark $city $state $zipCode $country $businessMobile
-            <br>
-            <b>$taxLabel </b> $taxNumber
-         </p>
-      </div>
-      <div class="border-top textbox-info">
-         <p class="f-left"><strong>${AppLocalizations.of(context).translate('invoice_no')}</strong>&nbsp&nbsp$invoiceNo</p>
-      </div>
-      <div class="textbox-info">
-         <p class="f-left"><strong>${AppLocalizations.of(context).translate('date')}</strong>&nbsp&nbsp$dateTime</p>
-      </div>
-      <!-- Waiter info -->
-      <!-- customer info -->
-      <div class="textbox-info">
-         <p style="vertical-align: top;"><strong>
-            ${AppLocalizations.of(context).translate('customer')}
-            </strong>
-         </p>
-         <p>
-            $customerName
-         </p>
-         <div class="bw">
-            $customerAddress1 $customerAddress2 $customerCity $customerState $customerCountry<br>$customerMobile
-         </div>
-         <p></p>
-      </div>
-      <div class="bb-lg mb-10"></div>
-      <table style="padding-top: 5px !important" class="border-bottom width-100 table-f-12 mb-10">
-         <tbody>
-            <!--Products-->
-            $products
-         </tbody>
-      </table>
-      <div class="flex-box">
-         <p class="left text-left">
-            <strong>${AppLocalizations.of(context).translate('sub_total')}:</strong>
-         </p>
-         <p class="width-50 text-right">
-            <strong>$symbol ${Helper().formatCurrency(sTotal)}</strong>
-         </p>
-      </div>
-      <!-- Shipping Charges -->
-      $shippingHtml
-      <!-- Discount -->
-      $discountHtml
-      
-      $inlineDiscountHtml
-      
-      $taxHtml
-      
-      $inlineTaxesHtml
-      <div class="flex-box">
-         <p class="width-50 text-left">
-            <strong>${AppLocalizations.of(context).translate('total')}:</strong>
-         </p>
-         <p class="width-50 text-right">
-            <strong>$symbol $totalAmount</strong>
-         </p>
-      </div>
-      <!-- Payments -->
-      $payments
-      <!-- Total Paid-->
-      <div class="flex-box">
-         <p class="width-50 text-left">
-            ${AppLocalizations.of(context).translate('total')} ${AppLocalizations.of(context).translate('paid')}
-         </p>
-         <p class="width-50 text-right">
-            $symbol $totalReceived
-         </p>
-      </div>
-      <!-- Total Due-->
-      $dueHtml
-      
-      <div class="border-bottom width-100">&nbsp;</div>
-      <!-- tax -->
-   </div>
-   <!-- <button id="btnPrint" class="hidden-print">Print</button>
-      <script src="script.js"></script> -->
-   <style type="text/css">
-   
-      @media  print {
-      * {
-      font-size: 12px;
-      font-family: 'Times New Roman';
-      word-break: break-all;
-      }
-      .headings{
-      font-size: 16px;
-      font-weight: 700;
-      text-transform: uppercase;
-      }
-      .sub-headings{
-      font-size: 15px;
-      font-weight: 700;
-      }
-      .border-top{
-      border-top: 1px solid #242424;
-      }
-      .border-bottom{
-      border-bottom: 1px solid #242424;
-      }
-      .border-bottom-dotted{
-      border-bottom: 1px dotted darkgray;
-      }
-      td.serial_number, th.serial_number{
-      width: 5%;
-      max-width: 5%;
-      }
-      td.description,
-      th.description {
-      width: 35%;
-      max-width: 35%;
-      word-break: break-all;
-      }
-      td.quantity,
-      th.quantity {
-      width: 15%;
-      max-width: 15%;
-      word-break: break-all;
-      }
-      td.unit_price, th.unit_price{
-      width: 25%;
-      max-width: 25%;
-      word-break: break-all;
-      }
-      td.price,
-      th.price {
-      width: 20%;
-      max-width: 20%;
-      word-break: break-all;
-      }
-      .centered {
-      text-align: center;
-      align-content: center;
-      }
-      .ticket {
-      width: 100%;
-      max-width: 100%;
-      }
-      img {
-      max-width: inherit;
-      width: auto;
-      }
-      .hidden-print,
-      .hidden-print * {
-      display: none !important;
-      }
-      }
-      .table-info {
-      width: 100%;
-      }
-      .table-info tr:first-child td, .table-info tr:first-child th {
-      padding-top: 8px;
-      }
-      .table-info th {
-      text-align: left;
-      }
-      .table-info td {
-      text-align: right;
-      }
-      .logo {
-      float: left;
-      width:35%;
-      padding: 10px;
-      }
-      .text-with-image {
-      float: left;
-      width:65%;
-      }
-      .text-box {
-      width: 100%;
-      height: auto;
-      }
-      .m-0 {
-      margin:0;
-      }
-      .textbox-info {
-      clear: both;
-      }
-      .textbox-info p {
-      margin-bottom: 0px
-      }
-      .flex-box {
-      display: flex;
-      width: 100%;
-      }
-      .flex-box p {
-      width: 50%;
-      margin-bottom: 0px;
-      white-space: nowrap;
-      }
-      .table-f-12 th, .table-f-12 td {
-      font-size: 12px;
-      word-break: break-word;
-      }
-      .bw {
-      word-break: break-word;
-      }
-      .bb-lg {
-      border-bottom: 1px solid lightgray;
-      }
-   </style>
+    // HTML
+    final invoice = '''
+<section class="invoice print_section" id="receipt_section">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Receipt-$invoiceNo</title>
+
+<div class="ticket">
+  <div class="text-box">
+    <p class="centered">
+      <span class="headings">$business</span><br>
+      ${[
+      landmark,
+      city,
+      state,
+      zipCode,
+      country,
+      businessMobile
+    ].where((s) => s.isNotEmpty).join(' ')}<br>
+      <b>$taxLabel</b> $taxNumber
+    </p>
+  </div>
+
+  <div class="border-top textbox-info">
+    <p class="f-left"><strong>${AppLocalizations.of(context).translate('invoice_no')}</strong>&nbsp;&nbsp;$invoiceNo</p>
+  </div>
+  <div class="textbox-info">
+    <p class="f-left"><strong>${AppLocalizations.of(context).translate('date')}</strong>&nbsp;&nbsp;$dateStr</p>
+  </div>
+
+  <div class="textbox-info">
+    <p style="vertical-align: top;"><strong>${AppLocalizations.of(context).translate('customer')}</strong></p>
+    <p>$customerName</p>
+    <div class="bw">${[
+      customerAddress1,
+      customerAddress2,
+      customerCity,
+      customerState,
+      customerCountry
+    ].where((s) => s.isNotEmpty).join(' ')}<br>$customerMobile</div>
+    <p></p>
+  </div>
+
+  <div class="bb-lg mb-10"></div>
+
+  <table style="padding-top: 5px !important" class="border-bottom width-100 table-f-12 mb-10">
+    <tbody>
+      $productsHtml
+    </tbody>
+  </table>
+
+  <div class="flex-box">
+    <p class="left text-left"><strong>${AppLocalizations.of(context).translate('sub_total')}:</strong></p>
+    <p class="width-50 text-right"><strong>$symbol ${Helper().formatCurrency(sTotalNum)}</strong></p>
+  </div>
+
+  $shippingHtml
+  $discountHtml
+  $inlineDiscountHtml
+  $taxHtml
+  $inlineTaxesHtml
+
+  <div class="flex-box">
+    <p class="width-50 text-left"><strong>${AppLocalizations.of(context).translate('total')}:</strong></p>
+    <p class="width-50 text-right"><strong>$symbol ${Helper().formatCurrency(totalAmountNum)}</strong></p>
+  </div>
+
+  $paymentsHtml
+
+  <div class="flex-box">
+    <p class="width-50 text-left">${AppLocalizations.of(context).translate('total')} ${AppLocalizations.of(context).translate('paid')}</p>
+    <p class="width-50 text-right">$symbol ${Helper().formatCurrency(totalReceivedNum)}</p>
+  </div>
+
+  $dueHtml
+
+  <div class="border-bottom width-100">&nbsp;</div>
+</div>
+
+<style type="text/css">
+  @media print {
+    * { font-size: 12px; font-family: 'Times New Roman'; word-break: break-all; }
+    .headings{ font-size: 16px; font-weight: 700; text-transform: uppercase; }
+    .sub-headings{ font-size: 15px; font-weight: 700; }
+    .border-top{ border-top: 1px solid #242424; }
+    .border-bottom{ border-bottom: 1px solid #242424; }
+    .border-bottom-dotted{ border-bottom: 1px dotted darkgray; }
+    td.serial_number, th.serial_number{ width: 5%; max-width: 5%; }
+    td.description, th.description { width: 35%; max-width: 35%; word-break: break-all; }
+    td.quantity, th.quantity { width: 15%; max-width: 15%; word-break: break-all; }
+    td.unit_price, th.unit_price{ width: 25%; max-width: 25%; word-break: break-all; }
+    td.price, th.price { width: 20%; max-width: 20%; word-break: break-all; }
+    .centered { text-align: center; align-content: center; }
+    .ticket { width: 100%; max-width: 100%; }
+    img { max-width: inherit; width: auto; }
+    .hidden-print, .hidden-print * { display: none !important; }
+  }
+  .table-info { width: 100%; }
+  .table-info tr:first-child td, .table-info tr:first-child th { padding-top: 8px; }
+  .table-info th { text-align: left; }
+  .table-info td { text-align: right; }
+  .logo { float: left; width:35%; padding: 10px; }
+  .text-with-image { float: left; width:65%; }
+  .text-box { width: 100%; height: auto; }
+  .m-0 { margin:0; }
+  .textbox-info { clear: both; }
+  .textbox-info p { margin-bottom: 0px }
+  .flex-box { display: flex; width: 100%; }
+  .flex-box p { width: 50%; margin-bottom: 0px; white-space: nowrap; }
+  .table-f-12 th, .table-f-12 td { font-size: 12px; word-break: break-word; }
+  .bw { word-break: break-word; }
+  .bb-lg { border-bottom: 1px solid lightgray; }
+</style>
 </section>
     ''';
+
     return invoice;
   }
 }
