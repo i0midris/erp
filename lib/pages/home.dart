@@ -117,16 +117,22 @@ class _HomeState extends State<Home> {
           packageDetails['essentials_module'].toString() == '1') {
         //get attendance status(check-In/check-Out)
         checkedIn = await Attendance().getAttendanceStatus(Config.userId);
-        setState(() {});
+        if (mounted) {
+          setState(() {});
+        }
       } else {
+        if (mounted) {
+          setState(() {
+            checkedIn = null;
+          });
+        }
+      }
+    } else {
+      if (mounted) {
         setState(() {
           checkedIn = null;
         });
       }
-    } else {
-      setState(() {
-        checkedIn = null;
-      });
     }
   }
 

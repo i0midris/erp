@@ -5,12 +5,12 @@ import 'package:geolocator/geolocator.dart';
 import 'package:get_ip_address/get_ip_address.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:pos_final/pages/category_screen.dart';
 import 'package:pos_final/pages/home.dart';
 import 'package:pos_final/pages/home/home_screen.dart';
 import 'package:pos_final/pages/products.dart';
 import 'package:pos_final/pages/sales.dart';
 import 'package:pos_final/pages/pos/pos_single_page.dart';
+import 'package:pos_final/pages/purchases/purchase_management_screen.dart';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -76,9 +76,9 @@ class _LayoutState extends State<Layout> {
   int _selectedIndex = 0;
   List<Widget> pages_index = <Widget>[
     Home(),
-    CategoryScreen(),
     Products(),
     Sales(),
+    PurchaseManagementScreen(),
     PosSinglePage()
   ];
   @override
@@ -152,16 +152,16 @@ class _LayoutState extends State<Layout> {
             title: Text(AppLocalizations.of(context).translate('home')),
           ),
           FlashyTabBarItem(
-            icon: Icon(IconBroken.Category),
-            title: Text(AppLocalizations.of(context).translate('Categories')),
-          ),
-          FlashyTabBarItem(
             icon: Icon(IconBroken.Buy),
             title: Text(AppLocalizations.of(context).translate('products')),
           ),
           FlashyTabBarItem(
             icon: Icon(IconBroken.Chart),
             title: Text(AppLocalizations.of(context).translate('sales')),
+          ),
+          FlashyTabBarItem(
+            icon: const Icon(Icons.inventory),
+            title: Text(AppLocalizations.of(context).translate('purchases')),
           ),
           FlashyTabBarItem(
             icon: const Icon(

@@ -7,6 +7,7 @@ class Config {
   static final String baseUrl = ApiEndPoints.baseUrl;
   static int? userId;
   String clientId = '3',
+//      clientSecret = 'e81g8i6qAyYsZ7xDMsCB5dEOPKszmKazKaf6ojGD',
       clientSecret = 'FhXWUEVxccduLGU3mMHoA6cNbbB8EwM63h1UeR7C',
       copyright = '\u00a9',
       appName = 'app',
@@ -15,7 +16,7 @@ class Config {
       loginScreen = '${Config.baseUrl}/uploads/mobile/login.jpg',
       noDataImage = '${Config.baseUrl}/uploads/mobile/no_data.jpg',
       defaultBusinessImage = '${Config.baseUrl}/uploads/business_default.jpg';
-  final bool syncCallLog = true, showRegister = true, showFieldForce = false;
+  final bool syncCallLog = true, showRegister = true, showFieldForce = true;
 
   //quantity precision       //currency precision   //call_log sync duration
   static int quantityPrecision = 2,
@@ -36,7 +37,7 @@ class Config {
     'ch',
     'it'
   ];
-  String defaultLanguage = 'en';
+  String defaultLanguage = 'ar';
 
   //List of locales included
   List<Locale> supportedLocales = [

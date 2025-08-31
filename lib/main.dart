@@ -5,8 +5,9 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:provider/provider.dart';
+import 'package:provider/provider.dart' as legacy_provider;
 import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart' as intl; // for date/number locale
 
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -42,62 +43,65 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return BlocProvider(
-      create: (_) => NotificationsCubit()..getNotification(),
-      child: ChangeNotifierProvider<AppLanguage>(
-        create: (_) => appLanguage,
-        child: Consumer<AppLanguage>(
-          builder: (context, model, _) {
-            // Keep Intl in sync with the app locale (affects DateFormat, NumberFormat, etc.)
-            final locale = model.appLocal;
-            if (locale != null) {
-              intl.Intl.defaultLocale =
-                  locale.toLanguageTag(); // e.g., "ar", "en"
-            }
+    return ProviderScope(
+      child: BlocProvider(
+        create: (_) => NotificationsCubit()..getNotification(),
+        child: legacy_provider.ChangeNotifierProvider<AppLanguage>(
+          create: (_) => appLanguage,
+          child: legacy_provider.Consumer<AppLanguage>(
+            builder: (context, model, _) {
+              // Keep Intl in sync with the app locale (affects DateFormat, NumberFormat, etc.)
+              final locale = model.appLocal;
+              if (locale != null) {
+                intl.Intl.defaultLocale =
+                    locale.toLanguageTag(); // e.g., "ar", "en"
+              }
 
-            return MaterialApp(
-              debugShowCheckedModeBanner: false,
-              theme: AppTheme.getThemeFromThemeMode(1),
-              // If you’re using Material 3:
-              // theme: ThemeData(useMaterial3: true, colorSchemeSeed: Colors.indigo),
+              return MaterialApp(
+                debugShowCheckedModeBanner: false,
+                theme: AppTheme.getThemeFromThemeMode(1),
+                // If you’re using Material 3:
+                // theme: ThemeData(useMaterial3: true, colorSchemeSeed: Colors.indigo),
 
-              // ROUTING
-              routes: Routes.generateRoute(),
-              initialRoute: '/splash',
-              // If you added the POS page file I gave you, make sure
-              // Routes.generateRoute() contains: '/pos-single': (_) => const PosSinglePage(),
+                // ROUTING
+                routes: Routes.generateRoute(),
+                initialRoute: '/splash',
+                // If you added the POS page file I gave you, make sure
+                // Routes.generateRoute() contains: '/pos-single': (_) => const PosSinglePage(),
 
-              // LOCALE
-              locale: locale, // controlled by AppLanguage
-              supportedLocales: Config()
-                  .supportedLocales, // e.g., [Locale('ar'), Locale('en')]
-              localizationsDelegates: [
-                AppLocalizations.delegate,
-                GlobalMaterialLocalizations.delegate,
-                GlobalCupertinoLocalizations.delegate,
-                GlobalWidgetsLocalizations.delegate,
-              ],
+                // LOCALE
+                locale: locale, // controlled by AppLanguage
+                supportedLocales: Config()
+                    .supportedLocales, // e.g., [Locale('ar'), Locale('en')]
+                localizationsDelegates: [
+                  AppLocalizations.delegate,
+                  GlobalMaterialLocalizations.delegate,
+                  GlobalCupertinoLocalizations.delegate,
+                  GlobalWidgetsLocalizations.delegate,
+                ],
 
-              // Make sure we fall back gracefully and pick RTL for Arabic automatically
-              localeResolutionCallback: (deviceLocale, supported) {
-                if (locale != null) return locale; // respect saved user choice
-                if (deviceLocale == null) return supported.first;
-                for (final l in supported) {
-                  if (l.languageCode == deviceLocale.languageCode) return l;
-                }
-                return supported.first;
-              },
+                // Make sure we fall back gracefully and pick RTL for Arabic automatically
+                localeResolutionCallback: (deviceLocale, supported) {
+                  if (locale != null)
+                    return locale; // respect saved user choice
+                  if (deviceLocale == null) return supported.first;
+                  for (final l in supported) {
+                    if (l.languageCode == deviceLocale.languageCode) return l;
+                  }
+                  return supported.first;
+                },
 
-              // Keep bottom bars/panels above the keyboard across the app
-              builder: (context, child) {
-                final insets = MediaQuery.of(context).viewInsets;
-                return Padding(
-                  padding: EdgeInsets.only(bottom: insets.bottom),
-                  child: child ?? const SizedBox.shrink(),
-                );
-              },
-            );
-          },
+                // Keep bottom bars/panels above the keyboard across the app
+                builder: (context, child) {
+                  final insets = MediaQuery.of(context).viewInsets;
+                  return Padding(
+                    padding: EdgeInsets.only(bottom: insets.bottom),
+                    child: child ?? const SizedBox.shrink(),
+                  );
+                },
+              );
+            },
+          ),
         ),
       ),
     );

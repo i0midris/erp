@@ -1,0 +1,191 @@
+groups:
+  - name: erp_system_alerts
+    rules:
+      # Application Health Alerts
+      - alert: ERPWebDown
+        expr: up{job="erp-web"} == 0
+        for: 5m
+        labels:
+          severity: critical
+          service: web
+        annotations:
+          summary: "ERP Web Application is down"
+          description: "ERP Web Application has been down for more than 5 minutes."
+
+      - alert: ERPApiDown
+        expr: up{job="erp-api"} == 0
+        for: 5m
+        labels:
+          severity: critical
+          service: api
+        annotations:
+          summary: "ERP API is down"
+          description: "ERP API has been down for more than 5 minutes."
+
+      - alert: ERPDBDown
+        expr: up{job="erp-postgres"} == 0
+        for: 5m
+        labels:
+          severity: critical
+          service: database
+        annotations:
+          summary: "ERP Database is down"
+          description: "ERP PostgreSQL database has been down for more than 5 minutes."
+
+      - alert: ERPRedisDown
+        expr: up{job="erp-redis"} == 0
+        for: 10m
+        labels:
+          severity: warning
+          service: cache
+        annotations:
+          summary: "ERP Redis Cache is down"
+          description: "ERP Redis cache has been down for more than 10 minutes."
+
+      # Performance Alerts
+      - alert: ERPHighResponseTime
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job="erp-api"}[5m])) > 2
+        for: 10m
+        labels:
+          severity: warning
+          service: api
+        annotations:
+          summary: "ERP API High Response Time"
+          description: "ERP API 95th percentile response time is above 2 seconds for 10 minutes."
+
+      - alert: ERPHighErrorRate
+        expr: rate(http_requests_total{status=~"5..", job="erp-api"}[5m]) / rate(http_requests_total{job="erp-api"}[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          service: api
+        annotations:
+          summary: "ERP API High Error Rate"
+          description: "ERP API error rate is above 5% for 5 minutes."
+
+      # Resource Usage Alerts
+      - alert: ERPHighCPUUsage
+        expr: 100 - (avg by(instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 85
+        for: 10m
+        labels:
+          severity: warning
+          service: system
+        annotations:
+          summary: "ERP High CPU Usage"
+          description: "CPU usage is above 85% for 10 minutes."
+
+      - alert: ERPHighMemoryUsage
+        expr: (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100 > 85
+        for: 10m
+        labels:
+          severity: warning
+          service: system
+        annotations:
+          summary: "ERP High Memory Usage"
+          description: "Memory usage is above 85% for 10 minutes."
+
+      - alert: ERPLowDiskSpace
+        expr: (node_filesystem_avail_bytes / node_filesystem_size_bytes) * 100 < 15
+        for: 5m
+        labels:
+          severity: warning
+          service: system
+        annotations:
+          summary: "ERP Low Disk Space"
+          description: "Available disk space is below 15% for 5 minutes."
+
+      # Database Alerts
+      - alert: ERPDBHighConnections
+        expr: pg_stat_activity_count > 80
+        for: 5m
+        labels:
+          severity: warning
+          service: database
+        annotations:
+          summary: "ERP Database High Connections"
+          description: "PostgreSQL has more than 80 active connections for 5 minutes."
+
+      - alert: ERPDBSlowQueries
+        expr: rate(pg_stat_statements_total_time_seconds[5m]) / rate(pg_stat_statements_calls[5m]) > 1
+        for: 10m
+        labels:
+          severity: info
+          service: database
+        annotations:
+          summary: "ERP Database Slow Queries"
+          description: "Average query execution time is above 1 second for 10 minutes."
+
+      # Business Logic Alerts
+      - alert: ERPLowStockAlert
+        expr: erp_inventory_low_stock_items > 10
+        for: 5m
+        labels:
+          severity: info
+          service: inventory
+        annotations:
+          summary: "ERP Low Stock Alert"
+          description: "More than 10 items are low in stock."
+
+      - alert: ERPFailedPurchases
+        expr: increase(erp_purchase_failed_total[1h]) > 5
+        for: 5m
+        labels:
+          severity: warning
+          service: purchases
+        annotations:
+          summary: "ERP Failed Purchases"
+          description: "More than 5 purchase orders failed in the last hour."
+
+      # Security Alerts
+      - alert: ERPSuspiciousLoginAttempts
+        expr: rate(erp_auth_failed_total[5m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+          service: security
+        annotations:
+          summary: "ERP Suspicious Login Attempts"
+          description: "More than 10 failed login attempts per minute for 5 minutes."
+
+      - alert: ERPUnusualTraffic
+        expr: rate(http_requests_total{job="erp-web"}[5m]) > 1000
+        for: 5m
+        labels:
+          severity: info
+          service: web
+        annotations:
+          summary: "ERP Unusual Traffic"
+          description: "Web application receiving unusually high traffic (>1000 requests/minute)."
+
+  - name: erp_business_metrics
+    rules:
+      # Business Performance Metrics
+      - alert: ERPLowSalesPerformance
+        expr: rate(erp_sales_total_amount[1d]) < 1000
+        for: 1h
+        labels:
+          severity: info
+          service: business
+        annotations:
+          summary: "ERP Low Sales Performance"
+          description: "Daily sales are below $1000 threshold."
+
+      - alert: ERPInventoryImbalance
+        expr: erp_inventory_turnover_ratio < 2
+        for: 1d
+        labels:
+          severity: info
+          service: inventory
+        annotations:
+          summary: "ERP Low Inventory Turnover"
+          description: "Inventory turnover ratio is below 2 (slow-moving inventory)."
+
+      - alert: ERPHighReturnRate
+        expr: rate(erp_sales_returns_total[1d]) / rate(erp_sales_total[1d]) > 0.1
+        for: 1h
+        labels:
+          severity: warning
+          service: sales
+        annotations:
+          summary: "ERP High Return Rate"
+          description: "Sales return rate is above 10%."
