@@ -26,6 +26,8 @@ class _PurchaseCreationScreenState
   final _taxController = TextEditingController();
   final _shippingController = TextEditingController();
   final _notesController = TextEditingController();
+  final _paymentAmountController = TextEditingController();
+  final _paymentNoteController = TextEditingController();
 
   @override
   void initState() {
@@ -44,6 +46,8 @@ class _PurchaseCreationScreenState
     _taxController.dispose();
     _shippingController.dispose();
     _notesController.dispose();
+    _paymentAmountController.dispose();
+    _paymentNoteController.dispose();
     super.dispose();
   }
 
@@ -123,6 +127,12 @@ class _PurchaseCreationScreenState
                     // Financial Information Section
                     _buildSectionHeader('Financial Information'),
                     _buildFinancialSection(state, notifier),
+
+                    const SizedBox(height: 24),
+
+                    // Payment Information Section
+                    _buildSectionHeader('Payment Information'),
+                    _buildPaymentSection(state, notifier),
 
                     const SizedBox(height: 24),
 
@@ -386,14 +396,22 @@ class _PurchaseCreationScreenState
             Row(
               children: [
                 Expanded(
-                  child: Text('Quantity: ${line.quantity}'),
+                  child: Text(
+                    'Quantity: ${line.quantity}',
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
                 Expanded(
                   child: Text(
-                      'Unit Price: \$${line.unitPrice.toStringAsFixed(2)}'),
+                    'Unit Price: \$${line.unitPrice.toStringAsFixed(2)}',
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
                 Expanded(
-                  child: Text('Total: \$${line.lineTotal.toStringAsFixed(2)}'),
+                  child: Text(
+                    'Total: \$${line.lineTotal.toStringAsFixed(2)}',
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
               ],
             ),
@@ -414,6 +432,7 @@ class _PurchaseCreationScreenState
             Row(
               children: [
                 Expanded(
+                  flex: 3,
                   child: TextFormField(
                     controller: _discountController,
                     decoration: const InputDecoration(
@@ -428,24 +447,27 @@ class _PurchaseCreationScreenState
                   ),
                 ),
                 const SizedBox(width: 12),
-                SizedBox(
-                  width: 120,
-                  child: DropdownButtonFormField<String>(
-                    value: state.purchase?.discountType ?? 'fixed',
-                    decoration: const InputDecoration(
-                      labelText: 'Type',
-                      border: OutlineInputBorder(),
+                Expanded(
+                  flex: 2,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(minWidth: 140),
+                    child: DropdownButtonFormField<String>(
+                      value: state.purchase?.discountType ?? 'fixed',
+                      decoration: const InputDecoration(
+                        labelText: 'Type',
+                        border: OutlineInputBorder(),
+                      ),
+                      items: const [
+                        DropdownMenuItem(value: 'fixed', child: Text('Fixed')),
+                        DropdownMenuItem(
+                            value: 'percentage', child: Text('Percentage')),
+                      ],
+                      onChanged: (value) {
+                        if (value != null) {
+                          notifier.updateDiscount(type: value);
+                        }
+                      },
                     ),
-                    items: const [
-                      DropdownMenuItem(value: 'fixed', child: Text('Fixed')),
-                      DropdownMenuItem(
-                          value: 'percentage', child: Text('Percentage')),
-                    ],
-                    onChanged: (value) {
-                      if (value != null) {
-                        notifier.updateDiscount(type: value);
-                      }
-                    },
                   ),
                 ),
               ],
@@ -544,6 +566,82 @@ class _PurchaseCreationScreenState
                 ],
               ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPaymentSection(
+      PurchaseCreationState state, PurchaseCreationNotifier notifier) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: [
+            // Add Payment Button
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: () => _showAddPaymentDialog(context, notifier),
+                    icon: const Icon(Icons.payment),
+                    label: const Text('Add Payment'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.blue,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 16),
+
+            // Payment List
+            if (state.purchase?.payments != null &&
+                state.purchase!.payments!.isNotEmpty)
+              ListView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                itemCount: state.purchase!.payments!.length,
+                itemBuilder: (context, index) {
+                  final payment = state.purchase!.payments![index];
+                  return _buildPaymentItem(payment, index, notifier);
+                },
+              )
+            else
+              const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Text('No payments added yet'),
+                ),
+              ),
+
+            const SizedBox(height: 16),
+
+            // Total Paid
+            if (state.purchase?.payments != null &&
+                state.purchase!.payments!.isNotEmpty)
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.green.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('Total Paid:',
+                        style: TextStyle(fontWeight: FontWeight.bold)),
+                    Text(
+                      '\$${state.purchase!.payments!.fold<double>(0, (sum, payment) => sum + payment.amount).toStringAsFixed(2)}',
+                      style: const TextStyle(
+                          fontWeight: FontWeight.bold, color: Colors.green),
+                    ),
+                  ],
+                ),
+              ),
           ],
         ),
       ),
@@ -699,6 +797,186 @@ class _PurchaseCreationScreenState
         ],
       ),
     );
+  }
+
+  Widget _buildPaymentItem(
+      PurchasePayment payment, int index, PurchaseCreationNotifier notifier) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Payment ${index + 1}',
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.delete, size: 20, color: Colors.red),
+                  onPressed: () => notifier.removePayment(index),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: Row(
+                    children: [
+                      const Icon(Icons.attach_money,
+                          size: 16, color: Colors.green),
+                      const SizedBox(width: 4),
+                      Flexible(
+                        child: Text(
+                          '\$${payment.amount.toStringAsFixed(2)}',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w500,
+                            color: Colors.green,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: Row(
+                    children: [
+                      const Icon(Icons.credit_card, size: 16),
+                      const SizedBox(width: 4),
+                      Flexible(
+                        child: Text(
+                          _formatPaymentMethod(payment.method),
+                          style: const TextStyle(fontWeight: FontWeight.w500),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            if (payment.note != null && payment.note!.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text('Note: ${payment.note}'),
+            ],
+            if (payment.paidOn != null) ...[
+              const SizedBox(height: 4),
+              Text(
+                  'Paid on: ${DateFormat('yyyy-MM-dd').format(payment.paidOn!)}'),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showAddPaymentDialog(
+      BuildContext context, PurchaseCreationNotifier notifier) {
+    _paymentAmountController.clear();
+    _paymentNoteController.clear();
+    String selectedMethod = 'cash';
+
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          title: const Text('Add Payment'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextFormField(
+                controller: _paymentAmountController,
+                decoration: const InputDecoration(
+                  labelText: 'Payment Amount',
+                  border: OutlineInputBorder(),
+                  prefixText: '\$',
+                ),
+                keyboardType: TextInputType.number,
+              ),
+              const SizedBox(height: 16),
+              DropdownButtonFormField<String>(
+                value: selectedMethod,
+                decoration: const InputDecoration(
+                  labelText: 'Payment Method',
+                  border: OutlineInputBorder(),
+                ),
+                items: const [
+                  DropdownMenuItem(value: 'cash', child: Text('Cash')),
+                  DropdownMenuItem(value: 'card', child: Text('Card')),
+                  DropdownMenuItem(
+                      value: 'bank_transfer', child: Text('Bank Transfer')),
+                  DropdownMenuItem(value: 'cheque', child: Text('Cheque')),
+                  DropdownMenuItem(value: 'other', child: Text('Other')),
+                ],
+                onChanged: (value) {
+                  if (value != null) {
+                    setState(() => selectedMethod = value);
+                  }
+                },
+              ),
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: _paymentNoteController,
+                decoration: const InputDecoration(
+                  labelText: 'Note (Optional)',
+                  border: OutlineInputBorder(),
+                ),
+                maxLines: 2,
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                final amount =
+                    double.tryParse(_paymentAmountController.text) ?? 0;
+                if (amount > 0) {
+                  final payment = PurchasePayment(
+                    amount: amount,
+                    method: selectedMethod,
+                    paidOn: DateTime.now(),
+                    note: _paymentNoteController.text.isEmpty
+                        ? null
+                        : _paymentNoteController.text,
+                  );
+
+                  notifier.addPayment(payment);
+                  Navigator.of(context).pop();
+                }
+              },
+              child: const Text('Add Payment'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _formatPaymentMethod(String method) {
+    switch (method) {
+      case 'cash':
+        return 'Cash';
+      case 'card':
+        return 'Card';
+      case 'bank_transfer':
+        return 'Bank Transfer';
+      case 'cheque':
+        return 'Cheque';
+      case 'other':
+        return 'Other';
+      default:
+        return method;
+    }
   }
 
   void _submitPurchase() async {

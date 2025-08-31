@@ -11,6 +11,7 @@ import '../../apis/product.dart';
 import '../../helpers/AppTheme.dart';
 import '../../helpers/SizeConfig.dart';
 import '../../locale/MyLocalizations.dart';
+import 'purchase_creation_screen.dart';
 
 class PurchaseManagementScreen extends ConsumerStatefulWidget {
   static const String routeName = '/PurchaseManagementScreen';
@@ -567,25 +568,10 @@ class _PurchaseManagementScreenState
   }
 
   void _showCreatePurchaseDialog() {
-    // Implementation for create purchase dialog
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Create New Purchase'),
-        content: const Text('Purchase creation form will be implemented here.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.of(context).pop();
-              // Implement purchase creation
-            },
-            child: const Text('Create'),
-          ),
-        ],
+    // Navigate to the purchase creation screen
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => const PurchaseCreationScreen(),
       ),
     );
   }
