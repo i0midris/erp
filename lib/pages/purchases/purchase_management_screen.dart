@@ -135,7 +135,8 @@ class _PurchaseManagementScreenState
                 Expanded(
                   child: _buildSummaryCard(
                     context: context,
-                    title: 'Total Purchases',
+                    title: AppLocalizations.of(context)
+                        .translate('total_purchases'),
                     value: state.summary['total_purchases']?.toString() ?? '0',
                     icon: Icons.shopping_cart,
                     color: Colors.blue,
@@ -145,7 +146,8 @@ class _PurchaseManagementScreenState
                 Expanded(
                   child: _buildSummaryCard(
                     context: context,
-                    title: 'Pending Orders',
+                    title: AppLocalizations.of(context)
+                        .translate('pending_orders'),
                     value: state.summary['pending_orders']?.toString() ?? '0',
                     icon: Icons.pending,
                     color: Colors.orange,
@@ -159,7 +161,8 @@ class _PurchaseManagementScreenState
                 Expanded(
                   child: _buildSummaryCard(
                     context: context,
-                    title: 'Total Amount',
+                    title:
+                        AppLocalizations.of(context).translate('total_amount'),
                     value:
                         '\$${state.summary['total_amount']?.toString() ?? '0.00'}',
                     icon: Icons.attach_money,
@@ -170,7 +173,8 @@ class _PurchaseManagementScreenState
                 Expanded(
                   child: _buildSummaryCard(
                     context: context,
-                    title: 'Active Suppliers',
+                    title: AppLocalizations.of(context)
+                        .translate('active_suppliers'),
                     value: state.suppliers.length.toString(),
                     icon: Icons.business,
                     color: Colors.purple,
@@ -183,7 +187,7 @@ class _PurchaseManagementScreenState
 
             // Recent Purchases
             Text(
-              'Recent Purchases',
+              AppLocalizations.of(context).translate('recent_purchases'),
               style: Theme.of(context).textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.bold,
                   ),
@@ -210,7 +214,8 @@ class _PurchaseManagementScreenState
               TextField(
                 controller: _searchController,
                 decoration: InputDecoration(
-                  hintText: 'Search purchases...',
+                  hintText: AppLocalizations.of(context)
+                      .translate('search_purchases'),
                   prefixIcon: const Icon(Icons.search),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(8),
@@ -229,23 +234,36 @@ class _PurchaseManagementScreenState
                   Expanded(
                     child: DropdownButtonFormField<String>(
                       value: state.selectedStatus,
-                      decoration: const InputDecoration(
-                        labelText: 'Status',
+                      decoration: InputDecoration(
+                        labelText:
+                            AppLocalizations.of(context).translate('status'),
                         border: OutlineInputBorder(),
                       ),
                       items: [
-                        const DropdownMenuItem(
-                            value: 'all', child: Text('All Status')),
-                        const DropdownMenuItem(
-                            value: 'ordered', child: Text('Ordered')),
-                        const DropdownMenuItem(
-                            value: 'received', child: Text('Received')),
-                        const DropdownMenuItem(
-                            value: 'pending', child: Text('Pending')),
-                        const DropdownMenuItem(
-                            value: 'partial', child: Text('Partial')),
-                        const DropdownMenuItem(
-                            value: 'cancelled', child: Text('Cancelled')),
+                        DropdownMenuItem(
+                            value: 'all',
+                            child: Text(AppLocalizations.of(context)
+                                .translate('all_status'))),
+                        DropdownMenuItem(
+                            value: 'ordered',
+                            child: Text(AppLocalizations.of(context)
+                                .translate('ordered'))),
+                        DropdownMenuItem(
+                            value: 'received',
+                            child: Text(AppLocalizations.of(context)
+                                .translate('received'))),
+                        DropdownMenuItem(
+                            value: 'pending',
+                            child: Text(AppLocalizations.of(context)
+                                .translate('pending'))),
+                        DropdownMenuItem(
+                            value: 'partial',
+                            child: Text(AppLocalizations.of(context)
+                                .translate('partial'))),
+                        DropdownMenuItem(
+                            value: 'cancelled',
+                            child: Text(AppLocalizations.of(context)
+                                .translate('cancelled'))),
                       ],
                       onChanged: (value) {
                         if (value != null) {
@@ -258,13 +276,16 @@ class _PurchaseManagementScreenState
                   Expanded(
                     child: DropdownButtonFormField<String>(
                       value: state.selectedSupplier,
-                      decoration: const InputDecoration(
-                        labelText: 'Supplier',
+                      decoration: InputDecoration(
+                        labelText:
+                            AppLocalizations.of(context).translate('supplier'),
                         border: OutlineInputBorder(),
                       ),
                       items: [
-                        const DropdownMenuItem(
-                            value: 'all', child: Text('All Suppliers')),
+                        DropdownMenuItem(
+                            value: 'all',
+                            child: Text(AppLocalizations.of(context)
+                                .translate('all_suppliers'))),
                         ...state.suppliers.map((supplier) => DropdownMenuItem(
                               value: supplier.id.toString(),
                               child: Text(supplier.name),
@@ -288,7 +309,9 @@ class _PurchaseManagementScreenState
           child: RefreshIndicator(
             onRefresh: () => notifier.loadPurchases(),
             child: state.filteredPurchases.isEmpty
-                ? const Center(child: Text('No purchases found'))
+                ? Center(
+                    child: Text(AppLocalizations.of(context)
+                        .translate('no_purchases_found')))
                 : ListView.builder(
                     padding: const EdgeInsets.all(16),
                     itemCount: state.filteredPurchases.length,
@@ -309,7 +332,9 @@ class _PurchaseManagementScreenState
     return RefreshIndicator(
       onRefresh: () => notifier.loadSuppliers(),
       child: state.suppliers.isEmpty
-          ? const Center(child: Text('No suppliers found'))
+          ? Center(
+              child: Text(
+                  AppLocalizations.of(context).translate('no_suppliers_found')))
           : ListView.builder(
               padding: const EdgeInsets.all(16),
               itemCount: state.suppliers.length,
@@ -328,7 +353,7 @@ class _PurchaseManagementScreenState
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Purchase Reports',
+            AppLocalizations.of(context).translate('purchase_trends'),
             style: Theme.of(context).textTheme.titleLarge?.copyWith(
                   fontWeight: FontWeight.bold,
                 ),
@@ -338,32 +363,37 @@ class _PurchaseManagementScreenState
           // Report Options
           _buildReportCard(
             context: context,
-            title: 'Purchase Summary',
-            description: 'Overview of all purchases',
+            title: AppLocalizations.of(context).translate('purchase_summary'),
+            description: AppLocalizations.of(context)
+                .translate('overview_of_all_purchases'),
             icon: Icons.summarize,
             onTap: () => _generatePurchaseSummaryReport(),
           ),
 
           _buildReportCard(
             context: context,
-            title: 'Supplier Performance',
-            description: 'Analysis of supplier performance',
+            title:
+                AppLocalizations.of(context).translate('supplier_performance'),
+            description: AppLocalizations.of(context)
+                .translate('analysis_of_supplier_performance'),
             icon: Icons.analytics,
             onTap: () => _generateSupplierPerformanceReport(),
           ),
 
           _buildReportCard(
             context: context,
-            title: 'Low Stock Items',
-            description: 'Items that need reordering',
+            title: AppLocalizations.of(context).translate('low_stock_items'),
+            description: AppLocalizations.of(context)
+                .translate('items_that_need_reordering'),
             icon: Icons.warning,
             onTap: () => _generateLowStockReport(),
           ),
 
           _buildReportCard(
             context: context,
-            title: 'Purchase Trends',
-            description: 'Monthly purchase trends',
+            title: AppLocalizations.of(context).translate('purchase_trends'),
+            description: AppLocalizations.of(context)
+                .translate('monthly_purchase_trends'),
             icon: Icons.trending_up,
             onTap: () => _generatePurchaseTrendsReport(),
           ),
@@ -430,9 +460,12 @@ class _PurchaseManagementScreenState
         subtitle: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Supplier: ${supplier.name}'),
-            Text('Date: ${purchase.transactionDate.toString().split(' ')[0]}'),
-            Text('Amount: \$${purchase.finalTotal.toStringAsFixed(2)}'),
+            Text(
+                '${AppLocalizations.of(context).translate('supplier')}: ${supplier.name}'),
+            Text(
+                '${AppLocalizations.of(context).translate('transaction_date')}: ${purchase.transactionDate.toString().split(' ')[0]}'),
+            Text(
+                '${AppLocalizations.of(context).translate('total')}: \$${purchase.finalTotal.toStringAsFixed(2)}'),
           ],
         ),
         trailing: Text(
@@ -462,8 +495,10 @@ class _PurchaseManagementScreenState
         subtitle: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Mobile: ${supplier.mobile ?? 'N/A'}'),
-            Text('Balance: \$${supplier.balance ?? 0.00}'),
+            Text(
+                '${AppLocalizations.of(context).translate('mobile')}: ${supplier.mobile ?? 'N/A'}'),
+            Text(
+                '${AppLocalizations.of(context).translate('balance')}: \$${supplier.balance ?? 0.00}'),
           ],
         ),
         trailing: IconButton(
@@ -578,22 +613,31 @@ class _PurchaseManagementScreenState
 
   void _showPurchaseDetails(BuildContext context, Purchase purchase,
       PurchaseManagementNotifier notifier) {
+    final state = ref.read(purchaseManagementProvider);
+    final supplier = state.suppliers.firstWhere(
+      (s) => s.id == purchase.contactId,
+      orElse: () => const Supplier(id: 0, name: 'Unknown'),
+    );
+
     // Implementation for purchase details dialog/screen
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('Purchase Details - PO-${purchase.refNo ?? purchase.id}'),
+        title: Text(
+            '${AppLocalizations.of(context).translate('purchase_details')} - PO-${purchase.refNo ?? purchase.id}'),
         content: SingleChildScrollView(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(
-                  'Supplier: ${purchase.contactId}'), // Will be resolved to name later
+                  '${AppLocalizations.of(context).translate('supplier')}: ${supplier.name}'),
               Text(
-                  'Date: ${purchase.transactionDate.toString().split(' ')[0]}'),
-              Text('Status: ${purchase.status}'),
-              Text('Total: \$${purchase.finalTotal.toStringAsFixed(2)}'),
+                  '${AppLocalizations.of(context).translate('transaction_date')}: ${purchase.transactionDate.toString().split(' ')[0]}'),
+              Text(
+                  '${AppLocalizations.of(context).translate('status')}: ${purchase.status}'),
+              Text(
+                  '${AppLocalizations.of(context).translate('total')}: \$${purchase.finalTotal.toStringAsFixed(2)}'),
               // Add more details as needed
             ],
           ),
@@ -601,14 +645,14 @@ class _PurchaseManagementScreenState
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Close'),
+            child: Text(AppLocalizations.of(context).translate('close')),
           ),
           ElevatedButton(
             onPressed: () {
               Navigator.of(context).pop();
               // Implement edit functionality
             },
-            child: const Text('Edit'),
+            child: Text(AppLocalizations.of(context).translate('edit')),
           ),
         ],
       ),
@@ -626,9 +670,12 @@ class _PurchaseManagementScreenState
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text('Mobile: ${supplier.mobile ?? 'N/A'}'),
-              Text('Address: ${supplier.address ?? 'N/A'}'),
-              Text('Balance: \$${supplier.balance ?? 0.00}'),
+              Text(
+                  '${AppLocalizations.of(context).translate('mobile')}: ${supplier.mobile ?? 'N/A'}'),
+              Text(
+                  '${AppLocalizations.of(context).translate('address')}: ${supplier.address ?? 'N/A'}'),
+              Text(
+                  '${AppLocalizations.of(context).translate('balance')}: \$${supplier.balance ?? 0.00}'),
               // Add more supplier details
             ],
           ),
@@ -636,7 +683,7 @@ class _PurchaseManagementScreenState
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Close'),
+            child: Text(AppLocalizations.of(context).translate('close')),
           ),
         ],
       ),
@@ -646,31 +693,36 @@ class _PurchaseManagementScreenState
   void _generatePurchaseSummaryReport() {
     // Implementation for purchase summary report
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-          content: Text('Purchase Summary Report - Feature coming soon!')),
+      SnackBar(
+          content: Text(
+              '${AppLocalizations.of(context).translate('purchase_summary')} - ${AppLocalizations.of(context).translate('feature_coming_soon')}')),
     );
   }
 
   void _generateSupplierPerformanceReport() {
     // Implementation for supplier performance report
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-          content: Text('Supplier Performance Report - Feature coming soon!')),
+      SnackBar(
+          content: Text(
+              '${AppLocalizations.of(context).translate('supplier_performance')} - ${AppLocalizations.of(context).translate('feature_coming_soon')}')),
     );
   }
 
   void _generateLowStockReport() {
     // Implementation for low stock report
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Low Stock Report - Feature coming soon!')),
+      SnackBar(
+          content: Text(
+              '${AppLocalizations.of(context).translate('low_stock_items')} - ${AppLocalizations.of(context).translate('feature_coming_soon')}')),
     );
   }
 
   void _generatePurchaseTrendsReport() {
     // Implementation for purchase trends report
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-          content: Text('Purchase Trends Report - Feature coming soon!')),
+      SnackBar(
+          content: Text(
+              '${AppLocalizations.of(context).translate('purchase_trends')} - ${AppLocalizations.of(context).translate('feature_coming_soon')}')),
     );
   }
 }

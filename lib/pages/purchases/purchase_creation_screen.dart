@@ -6,6 +6,7 @@ import '../../models/purchase_models.dart';
 import '../../providers/purchase_provider.dart';
 import '../../helpers/AppTheme.dart';
 import '../../helpers/SizeConfig.dart';
+import '../../locale/MyLocalizations.dart';
 
 /// Main purchase creation screen
 class PurchaseCreationScreen extends ConsumerStatefulWidget {
@@ -58,7 +59,8 @@ class _PurchaseCreationScreenState
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Create Purchase Order'),
+        title: Text(
+            AppLocalizations.of(context).translate('create_purchase_order')),
         actions: [
           if (state.isFormValid)
             TextButton(
@@ -107,37 +109,43 @@ class _PurchaseCreationScreenState
                       ),
 
                     // Basic Information Section
-                    _buildSectionHeader('Basic Information'),
+                    _buildSectionHeader(AppLocalizations.of(context)
+                        .translate('basic_information')),
                     _buildBasicInfoSection(state, notifier),
 
                     const SizedBox(height: 24),
 
                     // Supplier and Location Section
-                    _buildSectionHeader('Supplier & Location'),
+                    _buildSectionHeader(AppLocalizations.of(context)
+                        .translate('supplier_location')),
                     _buildSupplierLocationSection(state, notifier),
 
                     const SizedBox(height: 24),
 
                     // Products Section
-                    _buildSectionHeader('Products'),
+                    _buildSectionHeader(
+                        AppLocalizations.of(context).translate('products')),
                     _buildProductsSection(state, notifier),
 
                     const SizedBox(height: 24),
 
                     // Financial Information Section
-                    _buildSectionHeader('Financial Information'),
+                    _buildSectionHeader(AppLocalizations.of(context)
+                        .translate('financial_information')),
                     _buildFinancialSection(state, notifier),
 
                     const SizedBox(height: 24),
 
                     // Payment Information Section
-                    _buildSectionHeader('Payment Information'),
+                    _buildSectionHeader(AppLocalizations.of(context)
+                        .translate('payment_information')),
                     _buildPaymentSection(state, notifier),
 
                     const SizedBox(height: 24),
 
                     // Additional Information Section
-                    _buildSectionHeader('Additional Information'),
+                    _buildSectionHeader(AppLocalizations.of(context)
+                        .translate('additional_information')),
                     _buildAdditionalInfoSection(state, notifier),
 
                     const SizedBox(height: 32),
@@ -157,7 +165,8 @@ class _PurchaseCreationScreenState
                         child: state.isSubmitting
                             ? const CircularProgressIndicator(
                                 color: Colors.white)
-                            : const Text('Create Purchase Order'),
+                            : Text(AppLocalizations.of(context)
+                                .translate('create_purchase_order')),
                       ),
                     ),
 
@@ -192,9 +201,11 @@ class _PurchaseCreationScreenState
             // Reference Number
             TextFormField(
               controller: _refNoController,
-              decoration: const InputDecoration(
-                labelText: 'Reference Number',
-                hintText: 'Leave empty for auto-generation',
+              decoration: InputDecoration(
+                labelText:
+                    AppLocalizations.of(context).translate('reference_number'),
+                hintText: AppLocalizations.of(context)
+                    .translate('leave_empty_for_auto_generation'),
                 border: OutlineInputBorder(),
               ),
               onChanged: (value) =>
@@ -210,8 +221,9 @@ class _PurchaseCreationScreenState
                 notifier.updateTransactionDate(date);
               }),
               child: InputDecorator(
-                decoration: const InputDecoration(
-                  labelText: 'Transaction Date',
+                decoration: InputDecoration(
+                  labelText: AppLocalizations.of(context)
+                      .translate('transaction_date'),
                   border: OutlineInputBorder(),
                   suffixIcon: Icon(Icons.calendar_today),
                 ),
@@ -227,21 +239,35 @@ class _PurchaseCreationScreenState
             // Status
             DropdownButtonFormField<String>(
               value: state.purchase?.status,
-              decoration: const InputDecoration(
-                labelText: 'Status',
+              decoration: InputDecoration(
+                labelText: AppLocalizations.of(context).translate('status'),
                 border: OutlineInputBorder(),
               ),
-              items: const [
-                DropdownMenuItem(value: 'ordered', child: Text('Ordered')),
-                DropdownMenuItem(value: 'received', child: Text('Received')),
-                DropdownMenuItem(value: 'pending', child: Text('Pending')),
-                DropdownMenuItem(value: 'partial', child: Text('Partial')),
+              items: [
+                DropdownMenuItem(
+                    value: 'ordered',
+                    child: Text(
+                        AppLocalizations.of(context).translate('ordered'))),
+                DropdownMenuItem(
+                    value: 'received',
+                    child: Text(
+                        AppLocalizations.of(context).translate('received'))),
+                DropdownMenuItem(
+                    value: 'pending',
+                    child: Text(
+                        AppLocalizations.of(context).translate('pending'))),
+                DropdownMenuItem(
+                    value: 'partial',
+                    child: Text(
+                        AppLocalizations.of(context).translate('partial'))),
               ],
               onChanged: (value) {
                 if (value != null) notifier.updateStatus(value);
               },
-              validator: (value) =>
-                  value == null ? 'Please select status' : null,
+              validator: (value) => value == null
+                  ? AppLocalizations.of(context)
+                      .translate('please_select_status')
+                  : null,
             ),
           ],
         ),
@@ -261,8 +287,9 @@ class _PurchaseCreationScreenState
               value: state.purchase?.contactId == 0
                   ? null
                   : state.purchase?.contactId,
-              decoration: const InputDecoration(
-                labelText: 'Supplier *',
+              decoration: InputDecoration(
+                labelText:
+                    '${AppLocalizations.of(context).translate('supplier')} *',
                 border: OutlineInputBorder(),
                 suffixIcon: Icon(Icons.search),
               ),

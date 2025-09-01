@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../locale/MyLocalizations.dart';
 import '../purchase_management_screen.dart';
 
 /// Main Purchases Screen - Entry point for purchase management
@@ -15,14 +16,15 @@ class PurchasesScreen extends StatelessWidget {
     });
 
     // Show loading while navigating
-    return const Scaffold(
+    return Scaffold(
       body: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            CircularProgressIndicator(),
-            SizedBox(height: 16),
-            Text('Loading Purchase Management...'),
+            const CircularProgressIndicator(),
+            const SizedBox(height: 16),
+            Text(AppLocalizations.of(context)
+                .translate('loading_purchase_management')),
           ],
         ),
       ),

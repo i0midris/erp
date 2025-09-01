@@ -4,6 +4,7 @@ import '../../models/purchase_models.dart';
 import '../../providers/purchase_management_provider.dart';
 import '../../helpers/AppTheme.dart';
 import '../../helpers/SizeConfig.dart';
+import '../../locale/MyLocalizations.dart';
 
 /// Purchase Details Screen
 class PurchaseDetailsScreen extends ConsumerStatefulWidget {
@@ -28,7 +29,7 @@ class _PurchaseDetailsScreenState extends ConsumerState<PurchaseDetailsScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Purchase Details'),
+        title: Text(AppLocalizations.of(context).translate('purchase_details')),
         actions: [
           IconButton(
             icon: const Icon(Icons.edit),
@@ -46,7 +47,9 @@ class _PurchaseDetailsScreenState extends ConsumerState<PurchaseDetailsScreen> {
       body: purchaseAsync.when(
         data: (purchase) => purchase != null
             ? _buildPurchaseDetails(purchase)
-            : const Center(child: Text('Purchase not found')),
+            : Center(
+                child: Text(AppLocalizations.of(context)
+                    .translate('purchase_not_found'))),
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (error, stack) => Center(
           child: Column(
@@ -54,12 +57,13 @@ class _PurchaseDetailsScreenState extends ConsumerState<PurchaseDetailsScreen> {
             children: [
               const Icon(Icons.error, size: 64, color: Colors.red),
               const SizedBox(height: 16),
-              Text('Error loading purchase: $error'),
+              Text(
+                  '${AppLocalizations.of(context).translate('error_loading_purchase')}: $error'),
               const SizedBox(height: 16),
               ElevatedButton(
                 onPressed: () =>
                     ref.invalidate(purchaseDetailsProvider(widget.purchaseId)),
-                child: const Text('Retry'),
+                child: Text(AppLocalizations.of(context).translate('retry')),
               ),
             ],
           ),
@@ -145,7 +149,7 @@ class _PurchaseDetailsScreenState extends ConsumerState<PurchaseDetailsScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Purchase Information',
+              AppLocalizations.of(context).translate('purchase_information'),
               style: Theme.of(context).textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.bold,
                   ),
@@ -175,7 +179,7 @@ class _PurchaseDetailsScreenState extends ConsumerState<PurchaseDetailsScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Line Items',
+              AppLocalizations.of(context).translate('line_items'),
               style: Theme.of(context).textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.bold,
                   ),
@@ -250,7 +254,7 @@ class _PurchaseDetailsScreenState extends ConsumerState<PurchaseDetailsScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Financial Summary',
+              AppLocalizations.of(context).translate('financial_summary'),
               style: Theme.of(context).textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.bold,
                   ),
@@ -280,7 +284,7 @@ class _PurchaseDetailsScreenState extends ConsumerState<PurchaseDetailsScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Additional Information',
+              AppLocalizations.of(context).translate('additional_information'),
               style: Theme.of(context).textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.bold,
                   ),
