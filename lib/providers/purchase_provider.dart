@@ -73,6 +73,7 @@ class PurchaseCreationNotifier extends StateNotifier<PurchaseCreationState> {
       transactionDate: now,
       totalBeforeTax: 0,
       finalTotal: 0,
+      exchangeRate: 1,
       purchaseLines: [],
     );
 
@@ -304,11 +305,12 @@ class PurchaseCreationNotifier extends StateNotifier<PurchaseCreationState> {
         payments: state.purchase!.payments,
       );
 
-      final createdPurchase = await _apiService.createPurchase(request);
+      await _apiService.createPurchase(request);
 
+      // Reset for a new entry
+      _initializePurchase();
       state = state.copyWith(
         isSubmitting: false,
-        purchase: createdPurchase,
         errorMessage: null,
       );
 
@@ -325,7 +327,6 @@ class PurchaseCreationNotifier extends StateNotifier<PurchaseCreationState> {
   /// Reset form
   void reset() {
     _initializePurchase();
-    state = const PurchaseCreationState();
   }
 
   /// Recalculate totals

@@ -944,7 +944,7 @@ class _PurchaseCreationScreenState
                   final payment = PurchasePayment(
                     amount: amount,
                     method: selectedMethod,
-                    paidOn: DateTime.now(),
+                    // Omit paidOn to let backend set and avoid format mismatch
                     note: _paymentNoteController.text.isEmpty
                         ? null
                         : _paymentNoteController.text,
@@ -993,8 +993,15 @@ class _PurchaseCreationScreenState
         ),
       );
 
-      // Navigate back or to purchase details
-      Navigator.of(context).pop();
+      // Clear form and prepare for a new entry
+      _refNoController.clear();
+      _discountController.clear();
+      _taxController.clear();
+      _shippingController.clear();
+      _notesController.clear();
+      _paymentAmountController.clear();
+      _paymentNoteController.clear();
+      ref.read(purchaseCreationProvider.notifier).reset();
     }
   }
 }

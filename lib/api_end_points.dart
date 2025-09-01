@@ -1,5 +1,15 @@
 abstract final class ApiEndPoints {
-  static String baseUrl = 'https://demo.albaseet-pos.cloud';
+  // Point to your Connector host (change this for different environments)
+
+  // For local development with Laragon (default Apache port 80):
+  //static String baseUrl = 'http://localhost';
+
+  // Alternative configurations:
+  // static String baseUrl = 'http://127.0.0.1';  // Alternative localhost
+  // static String baseUrl = 'http://localhost:8080';  // If using custom port
+  // static String baseUrl = 'http://ix.test';  // If using Laravel Valet
+  static String baseUrl = 'http://ix.com'; // For production/staging
+
   static String apiUrl = '/connector/api';
 
   //#region used by http
@@ -32,6 +42,6 @@ abstract final class ApiEndPoints {
   static String allBrands = '$apiUrl/brand';
 
   ///Purchases
-  static String purchases = '$apiUrl/purchases';
+  static String purchases = '$apiUrl/purchase';
   //#endregion
 }

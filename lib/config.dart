@@ -7,8 +7,8 @@ class Config {
   static final String baseUrl = ApiEndPoints.baseUrl;
   static int? userId;
   String clientId = '3',
-//      clientSecret = 'e81g8i6qAyYsZ7xDMsCB5dEOPKszmKazKaf6ojGD',
-      clientSecret = 'FhXWUEVxccduLGU3mMHoA6cNbbB8EwM63h1UeR7C',
+      clientSecret = 'e81g8i6qAyYsZ7xDMsCB5dEOPKszmKazKaf6ojGD',
+//      clientSecret = 'FhXWUEVxccduLGU3mMHoA6cNbbB8EwM63h1UeR7C',
       copyright = '\u00a9',
       appName = 'app',
       version = 'V 1.7',

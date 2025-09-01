@@ -8,7 +8,7 @@ The Purchase Management module provides comprehensive functionality for managing
 
 ### Purchase Orders
 
-#### GET /connector/api/purchases
+#### GET /connector/api/purchase
 Retrieve a list of purchase orders with filtering and pagination.
 
 **Parameters:**
@@ -44,7 +44,7 @@ Retrieve a list of purchase orders with filtering and pagination.
 }
 ```
 
-#### POST /connector/api/purchases
+#### POST /connector/api/purchase
 Create a new purchase order.
 
 **Request Body:**
@@ -68,16 +68,16 @@ Create a new purchase order.
 }
 ```
 
-#### GET /connector/api/purchases/{id}
+#### GET /connector/api/purchase/{id}
 Retrieve a specific purchase order by ID.
 
-#### PUT /connector/api/purchases/{id}
+#### PUT /connector/api/purchase/{id}
 Update an existing purchase order.
 
-#### DELETE /connector/api/purchases/{id}
+#### DELETE /connector/api/purchase/{id}
 Delete a purchase order.
 
-#### PUT /connector/api/purchases/{id}/status
+#### POST /connector/api/purchase/{id}/status
 Update the status of a purchase order.
 
 **Request Body:**
@@ -89,7 +89,7 @@ Update the status of a purchase order.
 
 ### Suppliers
 
-#### GET /connector/api/purchases/suppliers
+#### GET /connector/api/purchase/suppliers
 Retrieve a list of suppliers for purchase orders.
 
 **Parameters:**
@@ -112,7 +112,7 @@ Retrieve a list of suppliers for purchase orders.
 
 ### Products for Purchase
 
-#### GET /connector/api/purchases/products
+#### GET /connector/api/purchase/products
 Retrieve products available for purchase.
 
 **Parameters:**

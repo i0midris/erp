@@ -2,6 +2,64 @@
 // Based on Modules/Connector Purchase System
 
 import 'package:equatable/equatable.dart';
+import 'package:intl/intl.dart';
+
+// Helpers to safely parse numeric values from dynamic (num or String)
+double? _asDouble(dynamic v) {
+  if (v == null) return null;
+  if (v is num) return v.toDouble();
+  if (v is String) {
+    final s = v.trim();
+    if (s.isEmpty) return null;
+    return double.tryParse(s);
+  }
+  return null;
+}
+
+int _asInt(dynamic v) {
+  if (v is int) return v;
+  if (v is num) return v.toInt();
+  if (v is String) {
+    final s = v.trim();
+    if (s.isEmpty) return 0;
+    return int.tryParse(s) ?? 0;
+  }
+  return 0;
+}
+
+int? _asIntOrNull(dynamic v) {
+  if (v == null) return null;
+  if (v is int) return v;
+  if (v is num) return v.toInt();
+  if (v is String) {
+    final s = v.trim();
+    if (s.isEmpty) return null;
+    return int.tryParse(s);
+  }
+  return null;
+}
+
+String _formatDateTime(DateTime dt) {
+  // Force ASCII digits regardless of app locale to satisfy backend (Laravel) validator
+  return DateFormat('yyyy-MM-dd HH:mm:ss', 'en_US').format(dt);
+}
+
+DateTime _parseDateTimeFlex(dynamic v) {
+  if (v == null) return DateTime.now();
+  if (v is DateTime) return v;
+  final s = v.toString().trim();
+  if (s.isEmpty) return DateTime.now();
+  // Try ISO first (with T)
+  try {
+    return DateTime.parse(s.contains('T') ? s : s.replaceFirst(' ', 'T'));
+  } catch (_) {}
+  // Try mysql-style format
+  try {
+    return DateFormat('yyyy-MM-dd HH:mm:ss').parse(s);
+  } catch (_) {}
+  // Fallback
+  return DateTime.now();
+}
 
 /// Purchase Line Item Model
 class PurchaseLineItem extends Equatable {
@@ -50,9 +108,24 @@ class PurchaseLineItem extends Equatable {
         'product_id': productId,
         'variation_id': variationId,
         'quantity': quantity,
+        // Base unit price
         'unit_price': unitPrice,
+        // Backend expected keys
+        'pp_without_discount': unitPrice,
+        'purchase_price': (lineDiscountType == 'fixed' && (lineDiscountAmount ?? 0) > 0)
+            ? (unitPrice - (lineDiscountAmount ?? 0))
+            : unitPrice,
+        'purchase_price_inc_tax': (lineDiscountType == 'fixed' && (lineDiscountAmount ?? 0) > 0)
+            ? (unitPrice - (lineDiscountAmount ?? 0))
+            : unitPrice,
+        'discount_percent': (lineDiscountType == 'percentage')
+            ? (lineDiscountAmount ?? 0)
+            : 0,
+        // Keep original keys for compatibility
         'line_discount_amount': lineDiscountAmount,
         'line_discount_type': lineDiscountType,
+        // Tax mapping
+        'purchase_line_tax_id': itemTaxId,
         'item_tax_id': itemTaxId,
         'item_tax': itemTax,
         'sub_unit_id': subUnitId,
@@ -66,16 +139,18 @@ class PurchaseLineItem extends Equatable {
   factory PurchaseLineItem.fromJson(Map<String, dynamic> json) =>
       PurchaseLineItem(
         id: json['id'],
-        productId: json['product_id'],
-        variationId: json['variation_id'],
+        productId: _asInt(json['product_id']),
+        variationId: _asInt(json['variation_id']),
         productName: json['product_name'] ?? '',
         variationName: json['variation_name'] ?? '',
-        quantity: (json['quantity'] as num?)?.toDouble() ?? 0,
-        unitPrice: (json['unit_price'] as num?)?.toDouble() ?? 0,
-        lineDiscountAmount: (json['line_discount_amount'] as num?)?.toDouble(),
+        quantity: _asDouble(json['quantity']) ?? 0,
+        // Accept both unit_price and purchase_price for compatibility
+        unitPrice: _asDouble(json['unit_price']) ??
+            _asDouble(json['purchase_price']) ?? 0,
+        lineDiscountAmount: _asDouble(json['line_discount_amount']),
         lineDiscountType: json['line_discount_type'],
-        itemTaxId: json['item_tax_id'],
-        itemTax: (json['item_tax'] as num?)?.toDouble(),
+        itemTaxId: _asInt(json['item_tax_id']),
+        itemTax: _asDouble(json['item_tax']),
         subUnitId: json['sub_unit_id'],
         lotNumber: json['lot_number'],
         mfgDate:
@@ -165,20 +240,26 @@ class PurchasePayment extends Equatable {
     this.note,
   });
 
-  Map<String, dynamic> toJson() => {
-        'amount': amount,
-        'method': method,
-        'paid_on': paidOn?.toIso8601String(),
-        'account_id': accountId,
-        'note': note,
-      };
+  Map<String, dynamic> toJson() {
+    // Build map and avoid sending paid_on if not explicitly set
+    // to let backend use its own default and parsing.
+    final map = <String, dynamic>{
+      'amount': amount,
+      'method': method,
+      'account_id': accountId,
+      'note': note,
+    };
+    if (paidOn != null) {
+      map['paid_on'] = _formatDateTime(paidOn!);
+    }
+    return map;
+  }
 
   factory PurchasePayment.fromJson(Map<String, dynamic> json) =>
       PurchasePayment(
-        amount: (json['amount'] as num?)?.toDouble() ?? 0,
+        amount: _asDouble(json['amount']) ?? 0,
         method: json['method'] ?? '',
-        paidOn:
-            json['paid_on'] != null ? DateTime.parse(json['paid_on']) : null,
+        paidOn: json['paid_on'] != null ? _parseDateTimeFlex(json['paid_on']) : null,
         accountId: json['account_id'],
         note: json['note'],
       );
@@ -302,57 +383,82 @@ class Purchase extends Equatable {
   double get totalDiscount => purchaseLines.fold(
       0, (sum, line) => sum + (line.lineDiscountAmount ?? 0));
 
-  Map<String, dynamic> toJson() => {
-        'contact_id': contactId,
-        'location_id': locationId,
-        'ref_no': refNo,
-        'status': status,
-        'transaction_date': transactionDate.toIso8601String(),
-        'total_before_tax': totalBeforeTax,
-        'discount_type': discountType,
-        'discount_amount': discountAmount,
-        'tax_id': taxId,
-        'tax_amount': taxAmount,
-        'shipping_charges': shippingCharges,
-        'shipping_details': shippingDetails,
-        'final_total': finalTotal,
-        'additional_notes': additionalNotes,
-        'exchange_rate': exchangeRate,
-        'pay_term_type': payTermType,
-        'pay_term_number': payTermNumber,
-        'purchase_order_ids': purchaseOrderIds,
-        'purchases': purchaseLines.map((line) => line.toJson()).toList(),
-        'payments': payments?.map((payment) => payment.toJson()).toList(),
-      };
+  Map<String, dynamic> toJson() {
+    // Build map without nulls that would violate Laravel's validation
+    final map = <String, dynamic>{
+      'contact_id': contactId,
+      'location_id': locationId,
+      'ref_no': refNo,
+      'status': status,
+      'transaction_date': _formatDateTime(transactionDate),
+      'total_before_tax': totalBeforeTax,
+      'discount_type': discountType,
+      'discount_amount': discountAmount,
+      'tax_id': taxId,
+      'tax_amount': taxAmount,
+      'shipping_charges': shippingCharges,
+      'shipping_details': shippingDetails,
+      'final_total': finalTotal,
+      'additional_notes': additionalNotes,
+      'exchange_rate': exchangeRate,
+      'purchases': purchaseLines.map((line) => line.toJson()).toList(),
+    };
+
+    if (purchaseOrderIds != null && purchaseOrderIds!.isNotEmpty) {
+      map['purchase_order_ids'] = purchaseOrderIds;
+    }
+    if (payTermType != null && (payTermNumber ?? 0) > 0) {
+      map['pay_term_type'] = payTermType;
+      map['pay_term_number'] = payTermNumber;
+    }
+
+    // Only include payments key if we actually have payments
+    if (payments != null && payments!.isNotEmpty) {
+      map['payments'] = payments!.map((p) => p.toJson()).toList();
+    }
+
+    return map;
+  }
 
   factory Purchase.fromJson(Map<String, dynamic> json) => Purchase(
         id: json['id'],
-        businessId: json['business_id'],
-        contactId: json['contact_id'],
-        locationId: json['location_id'],
+        businessId: _asInt(json['business_id']),
+        contactId: json.containsKey('contact_id')
+            ? _asInt(json['contact_id'])
+            : _asInt((json['contact'] is Map ? json['contact']['id'] : null)),
+        locationId: json.containsKey('location_id')
+            ? _asInt(json['location_id'])
+            : _asInt((json['location'] is Map ? json['location']['id'] : null)),
         refNo: json['ref_no'],
         status: json['status'],
-        transactionDate: DateTime.parse(json['transaction_date']),
-        totalBeforeTax: (json['total_before_tax'] as num?)?.toDouble() ?? 0,
+        transactionDate: _parseDateTimeFlex(json['transaction_date']),
+        totalBeforeTax: _asDouble(json['total_before_tax']) ?? 0,
         discountType: json['discount_type'],
-        discountAmount: (json['discount_amount'] as num?)?.toDouble(),
+        discountAmount: _asDouble(json['discount_amount']),
         taxId: json['tax_id'],
-        taxAmount: (json['tax_amount'] as num?)?.toDouble(),
-        shippingCharges: (json['shipping_charges'] as num?)?.toDouble(),
+        taxAmount: _asDouble(json['tax_amount']),
+        shippingCharges: _asDouble(json['shipping_charges']),
         shippingDetails: json['shipping_details'],
-        finalTotal: (json['final_total'] as num?)?.toDouble() ?? 0,
+        finalTotal: _asDouble(json['final_total']) ?? 0,
         additionalNotes: json['additional_notes'],
-        exchangeRate: (json['exchange_rate'] as num?)?.toDouble(),
+        exchangeRate: _asDouble(json['exchange_rate']),
         payTermType: json['pay_term_type'],
-        payTermNumber: json['pay_term_number'],
+        payTermNumber: json['pay_term_number'] != null
+            ? _asInt(json['pay_term_number'])
+            : null,
         purchaseOrderIds: json['purchase_order_ids'] != null
             ? List<int>.from(json['purchase_order_ids'])
             : null,
+        // Accept both response-style 'lines' and request-style 'purchases'
         purchaseLines: json['lines'] != null
             ? (json['lines'] as List)
                 .map((line) => PurchaseLineItem.fromJson(line))
                 .toList()
-            : [],
+            : (json['purchases'] != null
+                ? (json['purchases'] as List)
+                    .map((line) => PurchaseLineItem.fromJson(line))
+                    .toList()
+                : []),
         payments: json['payments'] != null
             ? (json['payments'] as List)
                 .map((payment) => PurchasePayment.fromJson(payment))
@@ -422,7 +528,7 @@ class Supplier extends Equatable {
         contactId: json['contact_id'],
         mobile: json['mobile'],
         address: json['address_line_1'],
-        balance: (json['balance'] as num?)?.toDouble(),
+        balance: _asDouble(json['balance']),
       );
 
   Map<String, dynamic> toJson() => {
@@ -464,14 +570,13 @@ class PurchaseProduct extends Equatable {
 
   factory PurchaseProduct.fromJson(Map<String, dynamic> json) =>
       PurchaseProduct(
-        productId: json['product_id'],
+        productId: _asInt(json['product_id']),
         productName: json['product_name'],
         productType: json['product_type'],
-        variationId: json['variation_id'],
+        variationId: _asInt(json['variation_id']),
         variationName: json['variation_name'],
         subSku: json['sub_sku'],
-        defaultPurchasePrice:
-            (json['default_purchase_price'] as num?)?.toDouble(),
+        defaultPurchasePrice: _asDouble(json['default_purchase_price']),
       );
 
   Map<String, dynamic> toJson() => {

@@ -1,8 +1,8 @@
-import 'dart:convert';
 import 'dart:developer';
 
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../config.dart';
 
 import '../models/purchase_models.dart';
 import '../models/system.dart';
@@ -35,10 +35,12 @@ class PurchaseApiService {
       InterceptorsWrapper(
         onRequest: (options, handler) async {
           // Add authorization header
-          final token = await System().getToken();
-          if (token != null) {
-            options.headers['Authorization'] = 'Bearer $token';
-          }
+          try {
+            final token = await System().getToken();
+            if (token.isNotEmpty) {
+              options.headers['Authorization'] = 'Bearer $token';
+            }
+          } catch (_) {}
           options.headers['Content-Type'] = 'application/json';
           options.headers['Accept'] = 'application/json';
 
@@ -64,15 +66,7 @@ class PurchaseApiService {
     );
   }
 
-  /// Get authentication token
-  Future<String?> _getToken() async {
-    try {
-      return await System().getToken();
-    } catch (e) {
-      log('Error getting token: $e');
-      return null;
-    }
-  }
+  // (removed unused _getToken helper)
 
   /// Create a new purchase
   Future<Purchase> createPurchase(CreatePurchaseRequest request) async {
@@ -143,14 +137,18 @@ class PurchaseApiService {
 
       if (response.statusCode == 200) {
         final data = response.data;
-        if (data['success'] == true && data['data'] != null) {
-          return Purchase.fromJson(data['data']);
-        } else {
-          throw ApiException(
-            message: 'Purchase not found',
-            statusCode: response.statusCode,
-          );
+        // Accept both connector style {data: {...}} and plain object
+        if (data is Map && data['data'] != null) {
+          return Purchase.fromJson(
+              (data['data'] as Map).cast<String, dynamic>());
         }
+        if (data is Map) {
+          return Purchase.fromJson((data as Map).cast<String, dynamic>());
+        }
+        throw ApiException(
+          message: 'Purchase not found',
+          statusCode: response.statusCode,
+        );
       } else {
         throw ApiException(
           message: 'Failed to fetch purchase',
@@ -179,17 +177,33 @@ class PurchaseApiService {
     try {
       final queryParams = <String, dynamic>{};
 
-      if (supplierId != null) queryParams['supplier_id'] = supplierId;
-      if (locationId != null) queryParams['location_id'] = locationId;
-      if (status != null) queryParams['status'] = status;
-      if (paymentStatus != null) queryParams['payment_status'] = paymentStatus;
-      if (startDate != null)
-        queryParams['date_from'] = startDate.toIso8601String().split('T')[0];
-      if (endDate != null)
-        queryParams['date_to'] = endDate.toIso8601String().split('T')[0];
-      if (refNo != null) queryParams['ref_no'] = refNo;
-      if (perPage != null) queryParams['per_page'] = perPage;
-      if (page != null) queryParams['page'] = page;
+      if (supplierId != null) {
+        queryParams['supplier_id'] = supplierId;
+      }
+      if (locationId != null) {
+        queryParams['location_id'] = locationId;
+      }
+      if (status != null) {
+        queryParams['status'] = status;
+      }
+      if (paymentStatus != null) {
+        queryParams['payment_status'] = paymentStatus;
+      }
+      if (startDate != null) {
+        queryParams['start_date'] = startDate.toIso8601String().split('T')[0];
+      }
+      if (endDate != null) {
+        queryParams['end_date'] = endDate.toIso8601String().split('T')[0];
+      }
+      if (refNo != null) {
+        queryParams['ref_no'] = refNo;
+      }
+      if (perPage != null) {
+        queryParams['per_page'] = perPage;
+      }
+      if (page != null) {
+        queryParams['page'] = page;
+      }
 
       final response = await _dio.get(
         '$_apiUrl/purchase',
@@ -198,25 +212,45 @@ class PurchaseApiService {
 
       if (response.statusCode == 200) {
         final data = response.data;
-        if (data['success'] == true && data['data'] != null) {
-          final purchases = (data['data']['data'] as List?)
-                  ?.map((item) => Purchase.fromJson(item))
-                  .toList() ??
-              [];
 
+        // Handle connector style: { data: [...], current_page, last_page, ... }
+        if (data is Map && data['data'] is List) {
+          final list = (data['data'] as List)
+              .map((item) =>
+                  Purchase.fromJson((item as Map).cast<String, dynamic>()))
+              .toList();
           return PurchaseListResponse(
-            purchases: purchases,
-            currentPage: data['data']['current_page'] ?? 1,
-            lastPage: data['data']['last_page'] ?? 1,
-            perPage: data['data']['per_page'] ?? perPage,
-            total: data['data']['total'] ?? 0,
-          );
-        } else {
-          throw ApiException(
-            message: 'Failed to fetch purchases',
-            statusCode: response.statusCode,
+            purchases: list,
+            currentPage:
+                data['current_page'] ?? data['data']['current_page'] ?? 1,
+            lastPage: data['last_page'] ?? data['data']['last_page'] ?? 1,
+            perPage:
+                data['per_page'] ?? data['data']['per_page'] ?? (perPage ?? 20),
+            total: data['total'] ?? data['data']['total'] ?? list.length,
           );
         }
+
+        // Handle legacy wrapper: { success:true, data:{ data:[...], ... } }
+        if (data is Map && data['success'] == true && data['data'] is Map) {
+          final inner = data['data'] as Map;
+          final list = (inner['data'] as List?)
+                  ?.map((item) =>
+                      Purchase.fromJson((item as Map).cast<String, dynamic>()))
+                  .toList() ??
+              [];
+          return PurchaseListResponse(
+            purchases: list,
+            currentPage: inner['current_page'] ?? 1,
+            lastPage: inner['last_page'] ?? 1,
+            perPage: inner['per_page'] ?? (perPage ?? 20),
+            total: inner['total'] ?? list.length,
+          );
+        }
+
+        throw ApiException(
+          message: 'Failed to fetch purchases',
+          statusCode: response.statusCode,
+        );
       } else {
         throw ApiException(
           message: 'Failed to fetch purchases',
@@ -294,7 +328,7 @@ class PurchaseApiService {
     try {
       final queryParams = <String, dynamic>{};
       if (searchTerm != null && searchTerm.isNotEmpty) {
-        queryParams['term'] = searchTerm;
+        queryParams['name'] = searchTerm;
       }
 
       final response = await _dio.get(
@@ -306,9 +340,18 @@ class PurchaseApiService {
         final data = response.data;
         if (data is List) {
           return data.map((item) => Supplier.fromJson(item)).toList();
-        } else {
-          return [];
         }
+        if (data is Map && data['data'] is List) {
+          return (data['data'] as List)
+              .map((item) => Supplier.fromJson(item))
+              .toList();
+        }
+        if (data is Map && data['results'] is List) {
+          return (data['results'] as List)
+              .map((item) => Supplier.fromJson(item))
+              .toList();
+        }
+        return [];
       } else {
         throw ApiException(
           message: 'Failed to fetch suppliers',
@@ -327,7 +370,7 @@ class PurchaseApiService {
     try {
       final queryParams = <String, dynamic>{};
       if (searchTerm != null && searchTerm.isNotEmpty) {
-        queryParams['term'] = searchTerm;
+        queryParams['name'] = searchTerm;
       }
 
       final response = await _dio.get(
@@ -339,9 +382,18 @@ class PurchaseApiService {
         final data = response.data;
         if (data is List) {
           return data.map((item) => PurchaseProduct.fromJson(item)).toList();
-        } else {
-          return [];
         }
+        if (data is Map && data['data'] is List) {
+          return (data['data'] as List)
+              .map((item) => PurchaseProduct.fromJson(item))
+              .toList();
+        }
+        if (data is Map && data['results'] is List) {
+          return (data['results'] as List)
+              .map((item) => PurchaseProduct.fromJson(item))
+              .toList();
+        }
+        return [];
       } else {
         throw ApiException(
           message: 'Failed to fetch products',
@@ -358,12 +410,13 @@ class PurchaseApiService {
   /// Check if reference number is duplicate
   Future<bool> checkReferenceNumber(int supplierId, String refNo) async {
     try {
+      final params = {
+        'contact_id': supplierId,
+        'ref_no': refNo,
+      };
       final response = await _dio.get(
         '$_apiUrl/purchase/check-ref',
-        queryParameters: {
-          'contact_id': supplierId,
-          'ref_no': refNo,
-        },
+        queryParameters: params,
       );
 
       if (response.statusCode == 200) {
@@ -388,7 +441,7 @@ class PurchaseApiService {
       case DioExceptionType.connectionTimeout:
       case DioExceptionType.sendTimeout:
       case DioExceptionType.receiveTimeout:
-        return ApiException(
+        return const ApiException(
           message: 'Connection timeout. Please check your internet connection.',
           statusCode: 408,
         );
@@ -398,6 +451,12 @@ class PurchaseApiService {
         final data = error.response?.data;
 
         if (statusCode == 401) {
+          // Clear invalid token on authentication failure
+          try {
+            // Note: This assumes System() has a clearToken method
+            // You may need to implement this in your System class
+            // System().clearToken();
+          } catch (_) {}
           return ApiException(
             message: 'Authentication failed. Please login again.',
             statusCode: statusCode,
@@ -405,6 +464,12 @@ class PurchaseApiService {
         } else if (statusCode == 403) {
           return ApiException(
             message: 'You do not have permission to perform this action.',
+            statusCode: statusCode,
+          );
+        } else if (statusCode == 404) {
+          return ApiException(
+            message:
+                'API endpoint not found. Please check your connection or contact support.',
             statusCode: statusCode,
           );
         } else if (statusCode == 422) {
@@ -425,20 +490,30 @@ class PurchaseApiService {
             statusCode: statusCode,
           );
         } else {
+          // Try to extract meaningful message across different backend wrappers
+          String message = 'Server error occurred';
+          try {
+            final d = data as dynamic;
+            message = d?['message'] ??
+                d?['msg'] ??
+                d?['error']?['message'] ??
+                d?['error'] ??
+                message;
+          } catch (_) {}
           return ApiException(
-            message: data?['message'] ?? 'Server error occurred',
+            message: message,
             statusCode: statusCode,
           );
         }
 
       case DioExceptionType.cancel:
-        return ApiException(
+        return const ApiException(
           message: 'Request was cancelled',
           statusCode: 499,
         );
 
       default:
-        return ApiException(
+        return const ApiException(
           message: 'Network error occurred. Please try again.',
           statusCode: 0,
         );
@@ -485,6 +560,6 @@ final purchaseApiServiceProvider = Provider<PurchaseApiService>((ref) {
   final dio = Dio();
   return PurchaseApiService(
     dio: dio,
-    baseUrl: 'https://demo.albaseet-pos.cloud', // Should be configurable
+    baseUrl: Config.baseUrl,
   );
 });
