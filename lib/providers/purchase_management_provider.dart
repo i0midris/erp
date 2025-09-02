@@ -1,7 +1,9 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/purchase_models.dart';
+import '../models/purchaseDatabase.dart';
 import '../services/purchase_api_bridge.dart';
 import '../services/purchase_api_service.dart';
+import '../helpers/otherHelpers.dart';
 
 /// State class for purchase management
 class PurchaseManagementState {
@@ -124,22 +126,90 @@ class PurchaseManagementNotifier
   /// Load purchases with current filters
   Future<void> loadPurchases() async {
     try {
-      final result = await _purchaseApi.getPurchases(
-        status: state.selectedStatus != 'all' ? state.selectedStatus : null,
-        supplierId:
-            state.selectedSupplier != 'all' ? state.selectedSupplier : null,
-        perPage: 20,
-      );
+      // First, load from local database
+      List<Purchase> localPurchases = [];
+      try {
+        final dbPurchases = await PurchaseDatabase().getPurchases();
+        localPurchases = dbPurchases.map((dbPurchase) {
+          // Convert database format to Purchase model
+          return Purchase(
+            id: dbPurchase['id'],
+            businessId: 1, // Default business ID
+            contactId: dbPurchase['contact_id'],
+            locationId: dbPurchase['location_id'],
+            refNo: dbPurchase['ref_no'],
+            status: dbPurchase['status'],
+            transactionDate: DateTime.parse(dbPurchase['transaction_date']),
+            totalBeforeTax: dbPurchase['total_before_tax']?.toDouble() ?? 0.0,
+            discountType: dbPurchase['discount_type'],
+            discountAmount: dbPurchase['discount_amount']?.toDouble(),
+            taxId: dbPurchase['tax_id'],
+            taxAmount: dbPurchase['tax_amount']?.toDouble(),
+            shippingCharges: dbPurchase['shipping_charges']?.toDouble(),
+            shippingDetails: dbPurchase['shipping_details'],
+            finalTotal: dbPurchase['final_total']?.toDouble() ?? 0.0,
+            additionalNotes: dbPurchase['additional_notes'],
+            purchaseLines: [], // Will be loaded separately if needed
+          );
+        }).toList();
+      } catch (dbError) {
+        print('Failed to load purchases from database: $dbError');
+      }
 
-      final purchases = (result['data'] as List<dynamic>?)
-              ?.map((item) => Purchase.fromJson(item as Map<String, dynamic>))
-              .toList() ??
-          [];
+      // Try to load from API if connected
+      try {
+        if (await Helper().checkConnectivity()) {
+          final result = await _purchaseApi.getPurchases(
+            status: state.selectedStatus != 'all' ? state.selectedStatus : null,
+            supplierId:
+                state.selectedSupplier != 'all' ? state.selectedSupplier : null,
+            perPage: 20,
+          );
 
-      state = state.copyWith(purchases: purchases);
+          final apiPurchases = (result['data'] as List<dynamic>?)
+                  ?.map(
+                      (item) => Purchase.fromJson(item as Map<String, dynamic>))
+                  .toList() ??
+              [];
+
+          // Merge local and API purchases, preferring API data for synced items
+          final mergedPurchases = _mergePurchases(localPurchases, apiPurchases);
+          state = state.copyWith(purchases: mergedPurchases);
+        } else {
+          // Offline mode - use only local data
+          state = state.copyWith(purchases: localPurchases);
+        }
+      } catch (apiError) {
+        print('Failed to load purchases from API: $apiError');
+        // Use local data if API fails
+        state = state.copyWith(purchases: localPurchases);
+      }
     } catch (e) {
       state = state.copyWith(errorMessage: 'Failed to load purchases: $e');
     }
+  }
+
+  /// Merge local and API purchases
+  List<Purchase> _mergePurchases(
+      List<Purchase> localPurchases, List<Purchase> apiPurchases) {
+    final merged = <Purchase>[];
+
+    // Add all API purchases
+    merged.addAll(apiPurchases);
+
+    // Add local purchases that are not synced (don't exist in API)
+    for (final localPurchase in localPurchases) {
+      final existsInApi = apiPurchases.any((apiPurchase) =>
+          apiPurchase.id == localPurchase.id ||
+          (apiPurchase.refNo == localPurchase.refNo &&
+              apiPurchase.refNo != null));
+
+      if (!existsInApi) {
+        merged.add(localPurchase);
+      }
+    }
+
+    return merged;
   }
 
   /// Load suppliers
@@ -271,6 +341,86 @@ class PurchaseManagementNotifier
     } catch (e) {
       state =
           state.copyWith(errorMessage: 'Failed to update purchase status: $e');
+      return false;
+    }
+  }
+
+  /// Sync purchases with server
+  Future<bool> syncPurchases() async {
+    try {
+      if (await Helper().checkConnectivity()) {
+        // Get unsynced purchases from database
+        final unsyncedPurchases =
+            await PurchaseDatabase().getNotSyncedPurchases();
+
+        for (final dbPurchase in unsyncedPurchases) {
+          try {
+            // Load purchase lines for this purchase
+            final purchaseLines =
+                await PurchaseDatabase().getPurchaseLines(dbPurchase['id']);
+
+            // Create API request from database data
+            final purchaseData = {
+              'business_id': 1, // Default business ID
+              'contact_id': dbPurchase['contact_id'],
+              'location_id': dbPurchase['location_id'],
+              'ref_no': dbPurchase['ref_no'],
+              'status': dbPurchase['status'],
+              'transaction_date': dbPurchase['transaction_date'],
+              'total_before_tax': dbPurchase['total_before_tax'],
+              'discount_type': dbPurchase['discount_type'],
+              'discount_amount': dbPurchase['discount_amount'],
+              'tax_id': dbPurchase['tax_id'],
+              'tax_amount': dbPurchase['tax_amount'],
+              'shipping_charges': dbPurchase['shipping_charges'],
+              'shipping_details': dbPurchase['shipping_details'],
+              'final_total': dbPurchase['final_total'],
+              'additional_notes': dbPurchase['additional_notes'],
+              'purchases': purchaseLines
+                  .map((line) => {
+                        'product_id': line['product_id'],
+                        'variation_id': line['variation_id'],
+                        'quantity': line['quantity'],
+                        'unit_price': line['unit_price'],
+                        'line_discount_amount': line['line_discount_amount'],
+                        'line_discount_type': line['line_discount_type'],
+                        'item_tax_id': line['item_tax_id'],
+                        'item_tax': line['item_tax'],
+                        'sub_unit_id': line['sub_unit_id'],
+                        'lot_number': line['lot_number'],
+                        'mfg_date': line['mfg_date'],
+                        'exp_date': line['exp_date'],
+                        'purchase_order_line_id':
+                            line['purchase_order_line_id'],
+                        'purchase_requisition_line_id':
+                            line['purchase_requisition_line_id'],
+                      })
+                  .toList(),
+            };
+
+            final result = await _purchaseApi.createPurchase(purchaseData);
+            if (result != null && result['transaction_id'] != null) {
+              // Update database with sync status
+              await PurchaseDatabase().updatePurchase(dbPurchase['id'], {
+                'is_synced': 1,
+                'transaction_id': result['transaction_id'],
+              });
+            }
+          } catch (syncError) {
+            print('Failed to sync purchase ${dbPurchase['id']}: $syncError');
+            // Continue with next purchase instead of failing completely
+          }
+        }
+
+        // Reload purchases after sync
+        await loadPurchases();
+        return true;
+      } else {
+        state = state.copyWith(errorMessage: 'No internet connection for sync');
+        return false;
+      }
+    } catch (e) {
+      state = state.copyWith(errorMessage: 'Failed to sync purchases: $e');
       return false;
     }
   }

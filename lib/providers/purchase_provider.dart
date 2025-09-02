@@ -1,7 +1,10 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/purchase_models.dart';
+import '../models/purchase.dart' as purchase_db;
+import '../models/purchaseDatabase.dart';
 import '../services/purchase_api_service.dart';
+import '../helpers/otherHelpers.dart';
 
 /// State class for purchase creation
 class PurchaseCreationState {
@@ -300,12 +303,86 @@ class PurchaseCreationNotifier extends StateNotifier<PurchaseCreationState> {
     state = state.copyWith(isSubmitting: true, errorMessage: null);
 
     try {
-      final request = CreatePurchaseRequest(
-        purchase: state.purchase!,
-        payments: state.purchase!.payments,
-      );
+      // Save to local database first
+      final purchaseId = await PurchaseDatabase().storePurchase({
+        'transaction_date': state.purchase!.transactionDate.toIso8601String(),
+        'ref_no': state.purchase!.refNo,
+        'contact_id': state.purchase!.contactId,
+        'location_id': state.purchase!.locationId,
+        'status': state.purchase!.status,
+        'tax_id': state.purchase!.taxId,
+        'discount_amount': state.purchase!.discountAmount ?? 0.00,
+        'discount_type': state.purchase!.discountType ?? 'fixed',
+        'total_before_tax': state.purchase!.totalBeforeTax,
+        'tax_amount': state.purchase!.taxAmount ?? 0.00,
+        'final_total': state.purchase!.finalTotal,
+        'additional_notes': state.purchase!.additionalNotes,
+        'shipping_charges': state.purchase!.shippingCharges ?? 0.00,
+        'shipping_details': state.purchase!.shippingDetails,
+        'is_synced': 0, // Mark as not synced initially
+      });
 
-      await _apiService.createPurchase(request);
+      // Save purchase lines
+      for (final line in state.purchase!.purchaseLines) {
+        await PurchaseDatabase().storePurchaseLine({
+          'purchase_id': purchaseId,
+          'product_id': line.productId,
+          'variation_id': line.variationId,
+          'quantity': line.quantity,
+          'unit_price': line.unitPrice,
+          'line_discount_amount': line.lineDiscountAmount ?? 0.00,
+          'line_discount_type': line.lineDiscountType ?? 'fixed',
+          'item_tax_id': line.itemTaxId,
+          'item_tax': line.itemTax ?? 0.00,
+          'sub_unit_id': line.subUnitId,
+          'lot_number': line.lotNumber,
+          'mfg_date': line.mfgDate?.toIso8601String(),
+          'exp_date': line.expDate?.toIso8601String(),
+          'purchase_order_line_id': line.purchaseOrderLineId,
+          'purchase_requisition_line_id': line.purchaseRequisitionLineId,
+        });
+      }
+
+      // Save payments if any
+      if (state.purchase!.payments != null) {
+        for (final payment in state.purchase!.payments!) {
+          await PurchaseDatabase().storePurchasePayment({
+            'purchase_id': purchaseId,
+            'method': payment.method,
+            'amount': payment.amount,
+            'note': payment.note,
+            'paid_on': payment.paidOn?.toIso8601String(),
+          });
+        }
+      }
+
+      // Try to sync with API if connected
+      try {
+        if (await Helper().checkConnectivity()) {
+          final request = CreatePurchaseRequest(
+            purchase: state.purchase!,
+            payments: state.purchase!.payments,
+          );
+
+          final result = await _apiService.createPurchase(request);
+
+          // Update database with sync status and transaction ID
+          if (result != null && result.id != null) {
+            await PurchaseDatabase().updatePurchase(purchaseId, {
+              'is_synced': 1,
+              'transaction_id': result.id,
+            });
+          }
+        } else {
+          // Offline mode - purchase saved locally, will sync later
+          print('Purchase saved locally (offline mode)');
+        }
+      } catch (apiError) {
+        // API sync failed, but purchase is saved locally
+        // This is expected in offline mode or network issues
+        print('API sync failed, purchase saved locally: $apiError');
+        // Don't show error to user as this is expected behavior
+      }
 
       // Reset for a new entry
       _initializePurchase();

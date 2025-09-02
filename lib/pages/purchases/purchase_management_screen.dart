@@ -2,14 +2,18 @@ import 'dart:developer';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:material_design_icons_flutter/material_design_icons_flutter.dart';
 import '../../services/purchase_api_bridge.dart';
 import '../../services/purchase_api_service.dart';
 import '../../providers/purchase_management_provider.dart';
-import '../../models/purchase_models.dart';
+import '../../models/purchase_models.dart' as purchase_models;
+import '../../models/purchase.dart' as purchase_db;
+import '../../models/purchaseDatabase.dart';
 import '../../apis/contact.dart' as contact_api;
 import '../../apis/product.dart';
 import '../../helpers/AppTheme.dart';
 import '../../helpers/SizeConfig.dart';
+import '../../helpers/otherHelpers.dart';
 import '../../locale/MyLocalizations.dart';
 import 'purchase_creation_screen.dart';
 
@@ -34,16 +38,28 @@ class _PurchaseManagementScreenState
   // Controllers
   final TextEditingController _searchController = TextEditingController();
 
+  // Offline storage variables
+  bool _isSynced = true;
+  bool _isSyncing = false;
+
+  // Theme variables
+  static int themeType = 1;
+  late ThemeData themeData;
+  late CustomAppTheme customAppTheme;
+
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 4, vsync: this);
+    themeData = AppTheme.getThemeFromThemeMode(themeType);
+    customAppTheme = AppTheme.getCustomAppTheme(themeType);
     // Initialize with bridge for backward compatibility
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final apiService = ref.read(purchaseApiServiceProvider);
       _purchaseApi = PurchaseApiBridge(apiService);
       _contactApi = contact_api.CustomerApi();
       _productApi = ProductApi();
+      _loadPurchasesFromDatabase();
     });
   }
 
@@ -96,6 +112,14 @@ class _PurchaseManagementScreenState
           ],
         ),
         actions: [
+          TextButton(
+            onPressed: _isSyncing ? null : () => _syncPurchases(),
+            child: Text(
+              AppLocalizations.of(context).translate('sync'),
+              style: AppTheme.getTextStyle(themeData.textTheme.subtitle1,
+                  fontWeight: (_isSynced) ? 500 : 900, letterSpacing: -0.2),
+            ),
+          ),
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: state.isRefreshing ? null : () => notifier.refreshData(),
@@ -436,11 +460,14 @@ class _PurchaseManagementScreenState
     );
   }
 
-  Widget _buildPurchaseCard(BuildContext context, Purchase purchase,
-      PurchaseManagementState state, PurchaseManagementNotifier notifier) {
+  Widget _buildPurchaseCard(
+      BuildContext context,
+      purchase_models.Purchase purchase,
+      PurchaseManagementState state,
+      PurchaseManagementNotifier notifier) {
     final supplier = state.suppliers.firstWhere(
       (s) => s.id == purchase.contactId,
-      orElse: () => const Supplier(id: 0, name: 'Unknown'),
+      orElse: () => const purchase_models.Supplier(id: 0, name: 'Unknown'),
     );
 
     return Card(
@@ -480,7 +507,8 @@ class _PurchaseManagementScreenState
     );
   }
 
-  Widget _buildSupplierCard(BuildContext context, Supplier supplier) {
+  Widget _buildSupplierCard(
+      BuildContext context, purchase_models.Supplier supplier) {
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
       child: ListTile(
@@ -543,7 +571,7 @@ class _PurchaseManagementScreenState
         final purchase = recentPurchases[index];
         final supplier = state.suppliers.firstWhere(
           (s) => s.id == purchase.contactId,
-          orElse: () => const Supplier(id: 0, name: 'Unknown'),
+          orElse: () => const purchase_models.Supplier(id: 0, name: 'Unknown'),
         );
 
         return ListTile(
@@ -611,12 +639,12 @@ class _PurchaseManagementScreenState
     );
   }
 
-  void _showPurchaseDetails(BuildContext context, Purchase purchase,
-      PurchaseManagementNotifier notifier) {
+  void _showPurchaseDetails(BuildContext context,
+      purchase_models.Purchase purchase, PurchaseManagementNotifier notifier) {
     final state = ref.read(purchaseManagementProvider);
     final supplier = state.suppliers.firstWhere(
       (s) => s.id == purchase.contactId,
-      orElse: () => const Supplier(id: 0, name: 'Unknown'),
+      orElse: () => const purchase_models.Supplier(id: 0, name: 'Unknown'),
     );
 
     // Implementation for purchase details dialog/screen
@@ -659,7 +687,8 @@ class _PurchaseManagementScreenState
     );
   }
 
-  void _showSupplierDetails(BuildContext context, Supplier supplier) {
+  void _showSupplierDetails(
+      BuildContext context, purchase_models.Supplier supplier) {
     // Implementation for supplier details
     showDialog(
       context: context,
@@ -724,5 +753,97 @@ class _PurchaseManagementScreenState
           content: Text(
               '${AppLocalizations.of(context).translate('purchase_trends')} - ${AppLocalizations.of(context).translate('feature_coming_soon')}')),
     );
+  }
+
+  // Load purchases from local database
+  void _loadPurchasesFromDatabase() async {
+    try {
+      List purchases = await PurchaseDatabase().getPurchases();
+      // Check if any purchases are not synced
+      for (var purchase in purchases) {
+        if (purchase['is_synced'] == 0) {
+          setState(() {
+            _isSynced = false;
+          });
+          break;
+        }
+      }
+      // Update the provider with local data if needed
+      // This would require modifying the provider to accept local data
+    } catch (e) {
+      log('Error loading purchases from database: $e');
+    }
+  }
+
+  // Show toast message using snackbar (fluttertoast has initialization issues)
+  void _showToast(String message) {
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  // Sync purchases with server
+  void _syncPurchases() async {
+    if (_isSyncing) return;
+
+    setState(() {
+      _isSyncing = true;
+    });
+
+    try {
+      if (await Helper().checkConnectivity()) {
+        showDialog(
+          barrierDismissible: false,
+          context: context,
+          builder: (BuildContext context) {
+            return AlertDialog(
+              content: Row(
+                children: [
+                  CircularProgressIndicator(),
+                  Container(
+                      margin: EdgeInsets.only(left: 5),
+                      child: Text(AppLocalizations.of(context)
+                          .translate('sync_in_progress'))),
+                ],
+              ),
+            );
+          },
+        );
+
+        final notifier = ref.read(purchaseManagementProvider.notifier);
+        final success = await notifier.syncPurchases();
+        Navigator.pop(context);
+
+        if (success) {
+          setState(() {
+            _isSynced = true;
+            _isSyncing = false;
+          });
+          _showToast(AppLocalizations.of(context).translate('sync_completed'));
+        } else {
+          setState(() {
+            _isSyncing = false;
+          });
+          _showToast(AppLocalizations.of(context).translate('sync_failed'));
+        }
+      } else {
+        _showToast(
+            AppLocalizations.of(context).translate('check_connectivity'));
+        setState(() {
+          _isSyncing = false;
+        });
+      }
+    } catch (e) {
+      log('Error syncing purchases: $e');
+      setState(() {
+        _isSyncing = false;
+      });
+      _showToast(AppLocalizations.of(context).translate('sync_failed'));
+    }
   }
 }
