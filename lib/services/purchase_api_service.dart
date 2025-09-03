@@ -39,12 +39,16 @@ class PurchaseApiService {
             final token = await System().getToken();
             if (token.isNotEmpty) {
               options.headers['Authorization'] = 'Bearer $token';
+              log('API Request: ${options.method} ${options.uri} (Authenticated)');
+            } else {
+              log('API Request: ${options.method} ${options.uri} (No Auth Token)');
             }
-          } catch (_) {}
+          } catch (e) {
+            log('Error getting auth token: $e');
+          }
           options.headers['Content-Type'] = 'application/json';
           options.headers['Accept'] = 'application/json';
 
-          log('API Request: ${options.method} ${options.uri}');
           if (options.data != null) {
             log('Request Data: ${options.data}');
           }
@@ -397,6 +401,40 @@ class PurchaseApiService {
       } else {
         throw ApiException(
           message: 'Failed to fetch products',
+          statusCode: response.statusCode,
+        );
+      }
+    } on DioException catch (e) {
+      throw _handleDioError(e);
+    } catch (e) {
+      throw ApiException(message: 'Unexpected error: $e');
+    }
+  }
+
+  /// Get locations for purchase
+  Future<List<Map<String, dynamic>>> getLocations() async {
+    try {
+      final response = await _dio.get('$_apiUrl/business-location');
+
+      if (response.statusCode == 200) {
+        final data = response.data;
+        if (data is List) {
+          return data.map((item) => item as Map<String, dynamic>).toList();
+        }
+        if (data is Map && data['data'] is List) {
+          return (data['data'] as List)
+              .map((item) => item as Map<String, dynamic>)
+              .toList();
+        }
+        if (data is Map && data['results'] is List) {
+          return (data['results'] as List)
+              .map((item) => item as Map<String, dynamic>)
+              .toList();
+        }
+        return [];
+      } else {
+        throw ApiException(
+          message: 'Failed to fetch locations',
           statusCode: response.statusCode,
         );
       }

@@ -87,8 +87,23 @@ class System {
     final db = await dbProvider.database;
     var result =
         await db.query('system', where: 'key = ?', whereArgs: ['token']);
-    String? token = result[0]['value'].toString();
-    return token;
+    if (result.isNotEmpty) {
+      String? token = result[0]['value']?.toString();
+      return token ?? '';
+    }
+    return '';
+  }
+
+  // Check if user is authenticated (has valid token)
+  Future<bool> isAuthenticated() async {
+    final token = await getToken();
+    return token.isNotEmpty;
+  }
+
+  // Clear token (logout)
+  Future<void> clearToken() async {
+    final db = await dbProvider.database;
+    await db.delete('system', where: 'key = ?', whereArgs: ['token']);
   }
 
   // Return permission list

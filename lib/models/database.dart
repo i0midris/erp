@@ -68,7 +68,7 @@ class DbProvider {
   String createPurchaseTable =
       "CREATE TABLE purchase (id INTEGER PRIMARY KEY AUTOINCREMENT, transaction_date TEXT, ref_no TEXT,"
       " contact_id INTEGER, location_id INTEGER, status TEXT, tax_id INTEGER, discount_amount REAL,"
-      " discount_type TEXT, additional_notes TEXT, shipping_charges REAL DEFAULT 0.00,"
+      " discount_type TEXT, additional_notes TEXT, shipping_details TEXT, shipping_charges REAL DEFAULT 0.00,"
       " total_before_tax REAL, tax_amount REAL, final_total REAL,"
       " is_synced INTEGER, transaction_id INTEGER DEFAULT null)";
 
@@ -86,6 +86,38 @@ class DbProvider {
       " payment_id INTEGER DEFAULT null, method TEXT, amount REAL, note TEXT,"
       " account_id INTEGER DEFAULT null, paid_on TEXT)";
 
+  //query to create cached suppliers table
+  String createCachedSuppliersTable =
+      "CREATE TABLE IF NOT EXISTS cached_suppliers (id INTEGER PRIMARY KEY, name TEXT, business_name TEXT,"
+      " mobile TEXT, address_line_1 TEXT, city TEXT, state TEXT, country TEXT,"
+      " zip_code TEXT, contact_id TEXT, pay_term_type TEXT, pay_term_number INTEGER,"
+      " balance REAL, last_sync TEXT)";
+
+  //query to create cached products table
+  String createCachedProductsTable =
+      "CREATE TABLE IF NOT EXISTS cached_products (id INTEGER PRIMARY KEY AUTOINCREMENT, product_id INTEGER,"
+      " product_name TEXT, product_type TEXT, variation_id INTEGER, variation_name TEXT,"
+      " sub_sku TEXT, default_purchase_price REAL, last_sync TEXT)";
+
+  //query to create cached locations table
+  String createCachedLocationsTable =
+      "CREATE TABLE IF NOT EXISTS cached_locations (id INTEGER PRIMARY KEY, name TEXT, location_id INTEGER,"
+      " address TEXT, city TEXT, state TEXT, country TEXT, zip_code TEXT, last_sync TEXT)";
+
+  // Utility method to check if table exists
+  Future<bool> tableExists(String tableName) async {
+    final db = await database;
+    var result = await db.rawQuery(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='$tableName'");
+    return result.isNotEmpty;
+  }
+
+  // Utility method to drop table if exists (for testing/debugging)
+  Future<void> dropTableIfExists(String tableName) async {
+    final db = await database;
+    await db.execute("DROP TABLE IF EXISTS $tableName");
+  }
+
   //get database of type Future<database>
   Future<Database> get database async {
     // if database doesn't exists, create one
@@ -96,7 +128,7 @@ class DbProvider {
     return _database!;
   }
 
-  int currVersion = 7;
+  int currVersion = 9;
 
   //create tables during the creation of the database itself.
   Future<Database> initializeDatabase(loginUserId) async {
@@ -118,6 +150,9 @@ class DbProvider {
               await db.execute(createPurchaseTable);
               await db.execute(createPurchaseLineTable);
               await db.execute(createPurchasePaymentsTable);
+              await db.execute(createCachedSuppliersTable);
+              await db.execute(createCachedProductsTable);
+              await db.execute(createCachedLocationsTable);
             },
             onUpgrade: (db, oldVersion, newVersion) async {
               if (oldVersion < 2) {
@@ -154,6 +189,18 @@ class DbProvider {
                 await db.execute(createPurchaseTable);
                 await db.execute(createPurchaseLineTable);
                 await db.execute(createPurchasePaymentsTable);
+              }
+
+              if (oldVersion < 8) {
+                await db.execute(createCachedSuppliersTable);
+                await db.execute(createCachedProductsTable);
+                await db.execute(createCachedLocationsTable);
+              }
+
+              if (oldVersion < 9) {
+                // Add shipping_details column to purchase table
+                await db.execute(
+                    "ALTER TABLE purchase ADD COLUMN shipping_details TEXT");
               }
 
               db.setVersion(currVersion);
@@ -210,6 +257,12 @@ class DbProvider {
           await db.execute(createPurchaseTable);
           await db.execute(createPurchaseLineTable);
           await db.execute(createPurchasePaymentsTable);
+        }
+
+        if (oldVersion < 9) {
+          // Add shipping_details column to purchase table
+          await db
+              .execute("ALTER TABLE purchase ADD COLUMN shipping_details TEXT");
         }
 
         db.setVersion(currVersion);

@@ -4,6 +4,7 @@ import '../models/purchase_models.dart';
 import '../models/purchase.dart' as purchase_db;
 import '../models/purchaseDatabase.dart';
 import '../services/purchase_api_service.dart';
+import '../services/purchase_cache_service.dart';
 import '../helpers/otherHelpers.dart';
 
 /// State class for purchase creation
@@ -13,6 +14,7 @@ class PurchaseCreationState {
   final Purchase? purchase;
   final List<Supplier> suppliers;
   final List<PurchaseProduct> products;
+  final List<Map<String, dynamic>> locations;
   final String? errorMessage;
   final bool isValid;
 
@@ -22,6 +24,7 @@ class PurchaseCreationState {
     this.purchase,
     this.suppliers = const [],
     this.products = const [],
+    this.locations = const [],
     this.errorMessage,
     this.isValid = false,
   });
@@ -32,6 +35,7 @@ class PurchaseCreationState {
     Purchase? purchase,
     List<Supplier>? suppliers,
     List<PurchaseProduct>? products,
+    List<Map<String, dynamic>>? locations,
     String? errorMessage,
     bool? isValid,
   }) {
@@ -41,6 +45,7 @@ class PurchaseCreationState {
       purchase: purchase ?? this.purchase,
       suppliers: suppliers ?? this.suppliers,
       products: products ?? this.products,
+      locations: locations ?? this.locations,
       errorMessage: errorMessage,
       isValid: isValid ?? this.isValid,
     );
@@ -60,8 +65,9 @@ class PurchaseCreationState {
 /// Notifier for purchase creation
 class PurchaseCreationNotifier extends StateNotifier<PurchaseCreationState> {
   final PurchaseApiService _apiService;
+  final PurchaseCacheService _cacheService;
 
-  PurchaseCreationNotifier(this._apiService)
+  PurchaseCreationNotifier(this._apiService, this._cacheService)
       : super(const PurchaseCreationState()) {
     _initializePurchase();
   }
@@ -88,16 +94,66 @@ class PurchaseCreationNotifier extends StateNotifier<PurchaseCreationState> {
     state = state.copyWith(isLoading: true, errorMessage: null);
 
     try {
-      final suppliers = await _apiService.getSuppliers(searchTerm: searchTerm);
-      state = state.copyWith(
-        suppliers: suppliers,
-        isLoading: false,
-      );
+      // Try to load from cache first
+      final cachedSuppliers =
+          await _cacheService.getCachedSuppliers(searchTerm: searchTerm);
+      if (cachedSuppliers.isNotEmpty) {
+        final suppliers = cachedSuppliers
+            .map((supplier) => Supplier.fromJson(supplier))
+            .toList();
+        state = state.copyWith(
+          suppliers: suppliers,
+          isLoading: false,
+        );
+
+        // Try to refresh from API in background if online
+        if (await Helper().checkConnectivity()) {
+          try {
+            final freshSuppliers =
+                await _apiService.getSuppliers(searchTerm: searchTerm);
+            await _cacheService.cacheSuppliers(freshSuppliers);
+            state = state.copyWith(suppliers: freshSuppliers);
+          } catch (e) {
+            // Keep cached data if API fails
+            print('Failed to refresh suppliers from API: $e');
+          }
+        }
+      } else {
+        // No cached data, try to load from API
+        final suppliers =
+            await _apiService.getSuppliers(searchTerm: searchTerm);
+        await _cacheService.cacheSuppliers(suppliers);
+        state = state.copyWith(
+          suppliers: suppliers,
+          isLoading: false,
+        );
+      }
     } catch (e) {
-      state = state.copyWith(
-        isLoading: false,
-        errorMessage: 'Failed to load suppliers: $e',
-      );
+      // If both cache and API fail, try to load from cache as fallback
+      try {
+        final cachedSuppliers =
+            await _cacheService.getCachedSuppliers(searchTerm: searchTerm);
+        if (cachedSuppliers.isNotEmpty) {
+          final suppliers = cachedSuppliers
+              .map((supplier) => Supplier.fromJson(supplier))
+              .toList();
+          state = state.copyWith(
+            suppliers: suppliers,
+            isLoading: false,
+            errorMessage: 'Using cached data (offline mode)',
+          );
+        } else {
+          state = state.copyWith(
+            isLoading: false,
+            errorMessage: 'Failed to load suppliers: $e',
+          );
+        }
+      } catch (cacheError) {
+        state = state.copyWith(
+          isLoading: false,
+          errorMessage: 'Failed to load suppliers: $e',
+        );
+      }
     }
   }
 
@@ -106,16 +162,123 @@ class PurchaseCreationNotifier extends StateNotifier<PurchaseCreationState> {
     state = state.copyWith(isLoading: true, errorMessage: null);
 
     try {
-      final products = await _apiService.getProducts(searchTerm: searchTerm);
-      state = state.copyWith(
-        products: products,
-        isLoading: false,
-      );
+      // Try to load from cache first
+      final cachedProducts =
+          await _cacheService.getCachedProducts(searchTerm: searchTerm);
+      if (cachedProducts.isNotEmpty) {
+        final products = cachedProducts
+            .map((product) => PurchaseProduct.fromJson(product))
+            .toList();
+        state = state.copyWith(
+          products: products,
+          isLoading: false,
+        );
+
+        // Try to refresh from API in background if online
+        if (await Helper().checkConnectivity()) {
+          try {
+            final freshProducts =
+                await _apiService.getProducts(searchTerm: searchTerm);
+            await _cacheService.cacheProducts(freshProducts);
+            state = state.copyWith(products: freshProducts);
+          } catch (e) {
+            // Keep cached data if API fails
+            print('Failed to refresh products from API: $e');
+          }
+        }
+      } else {
+        // No cached data, try to load from API
+        final products = await _apiService.getProducts(searchTerm: searchTerm);
+        await _cacheService.cacheProducts(products);
+        state = state.copyWith(
+          products: products,
+          isLoading: false,
+        );
+      }
     } catch (e) {
-      state = state.copyWith(
-        isLoading: false,
-        errorMessage: 'Failed to load products: $e',
-      );
+      // If both cache and API fail, try to load from cache as fallback
+      try {
+        final cachedProducts =
+            await _cacheService.getCachedProducts(searchTerm: searchTerm);
+        if (cachedProducts.isNotEmpty) {
+          final products = cachedProducts
+              .map((product) => PurchaseProduct.fromJson(product))
+              .toList();
+          state = state.copyWith(
+            products: products,
+            isLoading: false,
+            errorMessage: 'Using cached data (offline mode)',
+          );
+        } else {
+          state = state.copyWith(
+            isLoading: false,
+            errorMessage: 'Failed to load products: $e',
+          );
+        }
+      } catch (cacheError) {
+        state = state.copyWith(
+          isLoading: false,
+          errorMessage: 'Failed to load products: $e',
+        );
+      }
+    }
+  }
+
+  /// Load locations
+  Future<void> loadLocations() async {
+    state = state.copyWith(isLoading: true, errorMessage: null);
+
+    try {
+      // Try to load from cache first
+      final cachedLocations = await _cacheService.getCachedLocations();
+      if (cachedLocations.isNotEmpty) {
+        state = state.copyWith(
+          locations: cachedLocations,
+          isLoading: false,
+        );
+
+        // Try to refresh from API in background if online
+        if (await Helper().checkConnectivity()) {
+          try {
+            final freshLocations = await _apiService.getLocations();
+            await _cacheService.cacheLocations(freshLocations);
+            state = state.copyWith(locations: freshLocations);
+          } catch (e) {
+            // Keep cached data if API fails
+            print('Failed to refresh locations from API: $e');
+          }
+        }
+      } else {
+        // No cached data, try to load from API
+        final locations = await _apiService.getLocations();
+        await _cacheService.cacheLocations(locations);
+        state = state.copyWith(
+          locations: locations,
+          isLoading: false,
+        );
+      }
+    } catch (e) {
+      // If both cache and API fail, try to load from cache as fallback
+      try {
+        final cachedLocations = await _cacheService.getCachedLocations();
+        if (cachedLocations.isNotEmpty) {
+          state = state.copyWith(
+            locations: cachedLocations,
+            isLoading: false,
+            errorMessage: 'Using cached data (offline mode)',
+          );
+        } else {
+          state = state.copyWith(
+            isLoading: false,
+            errorMessage: 'Failed to load locations: $e',
+          );
+        }
+      } catch (cacheError) {
+        state = state.copyWith(
+          isLoading: false,
+          errorMessage: 'Failed to load locations: $e',
+        );
+      }
     }
   }
 
@@ -442,7 +605,8 @@ final purchaseCreationProvider =
     StateNotifierProvider<PurchaseCreationNotifier, PurchaseCreationState>(
   (ref) {
     final apiService = ref.watch(purchaseApiServiceProvider);
-    return PurchaseCreationNotifier(apiService);
+    final cacheService = ref.watch(purchaseCacheServiceProvider);
+    return PurchaseCreationNotifier(apiService, cacheService);
   },
 );
 

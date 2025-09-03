@@ -1,8 +1,10 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/purchase_models.dart';
 import '../models/purchaseDatabase.dart';
+import '../models/system.dart';
 import '../services/purchase_api_bridge.dart';
 import '../services/purchase_api_service.dart';
+import '../services/purchase_cache_service.dart';
 import '../helpers/otherHelpers.dart';
 
 /// State class for purchase management
@@ -98,9 +100,10 @@ class PurchaseManagementState {
 class PurchaseManagementNotifier
     extends StateNotifier<PurchaseManagementState> {
   final PurchaseApiService _apiService;
+  final PurchaseCacheService _cacheService;
   late final PurchaseApiBridge _purchaseApi;
 
-  PurchaseManagementNotifier(this._apiService)
+  PurchaseManagementNotifier(this._apiService, this._cacheService)
       : super(const PurchaseManagementState()) {
     _purchaseApi = PurchaseApiBridge(_apiService);
     loadInitialData();
@@ -110,6 +113,9 @@ class PurchaseManagementNotifier
   Future<void> loadInitialData() async {
     state = state.copyWith(isLoading: true, errorMessage: null);
     try {
+      // Refresh cache if needed
+      await refreshCacheIfNeeded();
+
       await Future.wait([
         loadPurchases(),
         loadSuppliers(),
@@ -215,33 +221,117 @@ class PurchaseManagementNotifier
   /// Load suppliers
   Future<void> loadSuppliers() async {
     try {
-      final result = await _purchaseApi.getSuppliers();
-      final suppliers = (result['data'] as List<dynamic>?)
-              ?.map((item) => Supplier.fromJson(item as Map<String, dynamic>))
-              .toList() ??
-          [];
+      // Try to load from cache first
+      final cachedSuppliers = await _cacheService.getCachedSuppliers();
+      if (cachedSuppliers.isNotEmpty) {
+        final suppliers = cachedSuppliers
+            .map((supplier) => Supplier.fromJson(supplier))
+            .toList();
+        state = state.copyWith(suppliers: suppliers);
 
-      state = state.copyWith(suppliers: suppliers);
+        // Try to refresh from API in background if online
+        if (await Helper().checkConnectivity()) {
+          try {
+            final result = await _purchaseApi.getSuppliers();
+            final freshSuppliers = (result['data'] as List<dynamic>?)
+                    ?.map((item) =>
+                        Supplier.fromJson(item as Map<String, dynamic>))
+                    .toList() ??
+                [];
+            await _cacheService.cacheSuppliers(freshSuppliers);
+            state = state.copyWith(suppliers: freshSuppliers);
+          } catch (e) {
+            // Keep cached data if API fails
+            print('Failed to refresh suppliers from API: $e');
+          }
+        }
+      } else {
+        // No cached data, try to load from API
+        final result = await _purchaseApi.getSuppliers();
+        final suppliers = (result['data'] as List<dynamic>?)
+                ?.map((item) => Supplier.fromJson(item as Map<String, dynamic>))
+                .toList() ??
+            [];
+        await _cacheService.cacheSuppliers(suppliers);
+        state = state.copyWith(suppliers: suppliers);
+      }
     } catch (e) {
-      // Don't set error for suppliers, just log it
-      print('Failed to load suppliers: $e');
+      // If both cache and API fail, try to load from cache as fallback
+      try {
+        final cachedSuppliers = await _cacheService.getCachedSuppliers();
+        if (cachedSuppliers.isNotEmpty) {
+          final suppliers = cachedSuppliers
+              .map((supplier) => Supplier.fromJson(supplier))
+              .toList();
+          state = state.copyWith(
+            suppliers: suppliers,
+            errorMessage: 'Using cached data (offline mode)',
+          );
+        } else {
+          print('Failed to load suppliers: $e');
+        }
+      } catch (cacheError) {
+        print('Failed to load suppliers: $e');
+      }
     }
   }
 
   /// Load products
   Future<void> loadProducts() async {
     try {
-      final result = await _purchaseApi.getPurchaseProducts();
-      final products = (result['data'] as List<dynamic>?)
-              ?.map((item) =>
-                  PurchaseProduct.fromJson(item as Map<String, dynamic>))
-              .toList() ??
-          [];
+      // Try to load from cache first
+      final cachedProducts = await _cacheService.getCachedProducts();
+      if (cachedProducts.isNotEmpty) {
+        final products = cachedProducts
+            .map((product) => PurchaseProduct.fromJson(product))
+            .toList();
+        state = state.copyWith(products: products);
 
-      state = state.copyWith(products: products);
+        // Try to refresh from API in background if online
+        if (await Helper().checkConnectivity()) {
+          try {
+            final result = await _purchaseApi.getPurchaseProducts();
+            final freshProducts = (result['data'] as List<dynamic>?)
+                    ?.map((item) =>
+                        PurchaseProduct.fromJson(item as Map<String, dynamic>))
+                    .toList() ??
+                [];
+            await _cacheService.cacheProducts(freshProducts);
+            state = state.copyWith(products: freshProducts);
+          } catch (e) {
+            // Keep cached data if API fails
+            print('Failed to refresh products from API: $e');
+          }
+        }
+      } else {
+        // No cached data, try to load from API
+        final result = await _purchaseApi.getPurchaseProducts();
+        final products = (result['data'] as List<dynamic>?)
+                ?.map((item) =>
+                    PurchaseProduct.fromJson(item as Map<String, dynamic>))
+                .toList() ??
+            [];
+        await _cacheService.cacheProducts(products);
+        state = state.copyWith(products: products);
+      }
     } catch (e) {
-      // Don't set error for products, just log it
-      print('Failed to load products: $e');
+      // If both cache and API fail, try to load from cache as fallback
+      try {
+        final cachedProducts = await _cacheService.getCachedProducts();
+        if (cachedProducts.isNotEmpty) {
+          final products = cachedProducts
+              .map((product) => PurchaseProduct.fromJson(product))
+              .toList();
+          state = state.copyWith(
+            products: products,
+            errorMessage: 'Using cached data (offline mode)',
+          );
+        } else {
+          print('Failed to load products: $e');
+        }
+      } catch (cacheError) {
+        print('Failed to load products: $e');
+      }
     }
   }
 
@@ -349,10 +439,24 @@ class PurchaseManagementNotifier
   Future<bool> syncPurchases() async {
     try {
       if (await Helper().checkConnectivity()) {
+        // Check authentication before syncing
+        final system = System();
+        final isAuthenticated = await system.isAuthenticated();
+
+        if (!isAuthenticated) {
+          state =
+              state.copyWith(errorMessage: 'Please login to sync purchases');
+          return false;
+        }
+
+        // Refresh cache before syncing
+        await _cacheService.refreshCacheIfNeeded();
+
         // Get unsynced purchases from database
         final unsyncedPurchases =
             await PurchaseDatabase().getNotSyncedPurchases();
 
+        int syncedCount = 0;
         for (final dbPurchase in unsyncedPurchases) {
           try {
             // Load purchase lines for this purchase
@@ -405,6 +509,7 @@ class PurchaseManagementNotifier
                 'is_synced': 1,
                 'transaction_id': result['transaction_id'],
               });
+              syncedCount++;
             }
           } catch (syncError) {
             print('Failed to sync purchase ${dbPurchase['id']}: $syncError');
@@ -414,14 +519,54 @@ class PurchaseManagementNotifier
 
         // Reload purchases after sync
         await loadPurchases();
-        return true;
+
+        print('✅ Synced $syncedCount purchases successfully');
+        return syncedCount > 0;
       } else {
         state = state.copyWith(errorMessage: 'No internet connection for sync');
         return false;
       }
     } catch (e) {
+      // Handle authentication errors specifically
+      if (e.toString().contains('Authentication failed') ||
+          e.toString().contains('401')) {
+        state = state.copyWith(
+            errorMessage: 'Authentication failed. Please login again.');
+        return false;
+      }
+
       state = state.copyWith(errorMessage: 'Failed to sync purchases: $e');
       return false;
+    }
+  }
+
+  /// Refresh cache if stale
+  Future<void> refreshCacheIfNeeded() async {
+    try {
+      await _cacheService.refreshCacheIfNeeded();
+      print('Cache refreshed successfully');
+    } catch (e) {
+      print('Failed to refresh cache: $e');
+    }
+  }
+
+  /// Get cache statistics
+  Future<Map<String, dynamic>> getCacheStats() async {
+    try {
+      return await _cacheService.getCacheStats();
+    } catch (e) {
+      print('Failed to get cache stats: $e');
+      return {};
+    }
+  }
+
+  /// Clear all cached data
+  Future<void> clearCache() async {
+    try {
+      await _cacheService.clearCache();
+      print('Cache cleared successfully');
+    } catch (e) {
+      print('Failed to clear cache: $e');
     }
   }
 
@@ -434,7 +579,10 @@ class PurchaseManagementNotifier
 /// Provider for purchase management
 final purchaseManagementProvider =
     StateNotifierProvider<PurchaseManagementNotifier, PurchaseManagementState>(
-  (ref) => PurchaseManagementNotifier(ref.watch(purchaseApiServiceProvider)),
+  (ref) => PurchaseManagementNotifier(
+    ref.watch(purchaseApiServiceProvider),
+    ref.watch(purchaseCacheServiceProvider),
+  ),
 );
 
 /// Provider for individual purchase details

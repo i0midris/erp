@@ -10,11 +10,14 @@ import 'package:pos_final/apis/user.dart';
 import 'package:pos_final/config.dart';
 import 'package:pos_final/helpers/AppTheme.dart';
 import 'package:pos_final/helpers/otherHelpers.dart';
+import 'package:dio/dio.dart';
 import 'package:pos_final/models/contact_model.dart';
 import 'package:pos_final/models/database.dart';
 import 'package:pos_final/models/sellDatabase.dart';
 import 'package:pos_final/models/system.dart';
 import 'package:pos_final/models/variations.dart';
+import 'package:pos_final/services/purchase_cache_service.dart';
+import 'package:pos_final/services/purchase_api_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -127,6 +130,36 @@ class LoginCubit extends Cubit<LoginState> {
     //save system data
     await SystemApi().store();
     await System().insertProductLastSyncDateTimeNow();
+
+    // Initialize purchase cache service and cache purchase data
+    try {
+      // Create Dio instance for purchase API service
+      final dio = Dio(BaseOptions(
+        baseUrl: Config.baseUrl,
+        connectTimeout: const Duration(seconds: 30),
+        receiveTimeout: const Duration(seconds: 30),
+        sendTimeout: const Duration(seconds: 30),
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'Authorization': 'Bearer ${loginResponse['access_token']}',
+        },
+      ));
+
+      final purchaseApiService = PurchaseApiService(
+        dio: dio,
+        baseUrl: Config.baseUrl,
+      );
+      final cacheService = PurchaseCacheService(purchaseApiService);
+
+      // Cache purchase data in background
+      if (await Helper().checkConnectivity()) {
+        cacheService.cacheAllPurchaseData();
+      }
+    } catch (e) {
+      print('Failed to initialize purchase cache: $e');
+    }
+
     //check previous userId
     if (prefs.getInt('prevUserId') == null ||
         prefs.getInt('prevUserId') != prefs.getInt('userId')) {
@@ -144,8 +177,8 @@ class LoginCubit extends Cubit<LoginState> {
       }
     }
     //Take to home page
-   // Navigator.of(context).pushReplacementNamed('/layout');
-   // Navigator.of(context).pop();
+    // Navigator.of(context).pushReplacementNamed('/layout');
+    // Navigator.of(context).pop();
   }
 
   Future<void> checkOnLogin(BuildContext context) async {
