@@ -82,8 +82,14 @@ class PurchaseApiService {
 
       if (response.statusCode == 201 || response.statusCode == 200) {
         final data = response.data;
+
+        // Handle Laravel API Resource response format: { data: {...}, success: true, ... }
         if (data['success'] == true && data['data'] != null) {
           return Purchase.fromJson(data['data']);
+        }
+        // Handle direct response format: { id: 123, contact_id: 4, ... }
+        else if (data is Map && data['id'] != null) {
+          return Purchase.fromJson(data.cast<String, dynamic>());
         } else {
           throw ApiException(
             message: data['msg'] ?? 'Failed to create purchase',

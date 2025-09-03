@@ -458,14 +458,23 @@ class PurchaseCreationNotifier extends StateNotifier<PurchaseCreationState> {
 
   /// Submit purchase
   Future<bool> submitPurchase() async {
+    print('🛒 PURCHASE CREATION: Starting purchase submission...');
+
     if (state.purchase == null || !state.isFormValid) {
+      print('❌ PURCHASE CREATION: Form validation failed');
       state = state.copyWith(errorMessage: 'Please fill all required fields');
       return false;
     }
 
+    print('📋 PURCHASE CREATION: Form validation passed');
+    print(
+        '📊 PURCHASE CREATION: Purchase details - Supplier: ${state.purchase!.contactId}, Location: ${state.purchase!.locationId}, Total: ${state.purchase!.finalTotal}, Lines: ${state.purchase!.purchaseLines.length}');
+
     state = state.copyWith(isSubmitting: true, errorMessage: null);
 
     try {
+      print('💾 PURCHASE CREATION: Saving to local database...');
+
       // Save to local database first
       final purchaseId = await PurchaseDatabase().storePurchase({
         'transaction_date': state.purchase!.transactionDate.toIso8601String(),
@@ -485,8 +494,14 @@ class PurchaseCreationNotifier extends StateNotifier<PurchaseCreationState> {
         'is_synced': 0, // Mark as not synced initially
       });
 
+      print(
+          '✅ PURCHASE CREATION: Purchase saved to local DB with ID: $purchaseId');
+
       // Save purchase lines
-      for (final line in state.purchase!.purchaseLines) {
+      print(
+          '📦 PURCHASE CREATION: Saving ${state.purchase!.purchaseLines.length} purchase lines...');
+      for (int i = 0; i < state.purchase!.purchaseLines.length; i++) {
+        final line = state.purchase!.purchaseLines[i];
         await PurchaseDatabase().storePurchaseLine({
           'purchase_id': purchaseId,
           'product_id': line.productId,
@@ -504,11 +519,18 @@ class PurchaseCreationNotifier extends StateNotifier<PurchaseCreationState> {
           'purchase_order_line_id': line.purchaseOrderLineId,
           'purchase_requisition_line_id': line.purchaseRequisitionLineId,
         });
+        print(
+            '   • Line ${i + 1}: Product ${line.productId}, Qty: ${line.quantity}, Price: ${line.unitPrice}');
       }
+      print('✅ PURCHASE CREATION: All purchase lines saved');
 
       // Save payments if any
-      if (state.purchase!.payments != null) {
-        for (final payment in state.purchase!.payments!) {
+      if (state.purchase!.payments != null &&
+          state.purchase!.payments!.isNotEmpty) {
+        print(
+            '💳 PURCHASE CREATION: Saving ${state.purchase!.payments!.length} payments...');
+        for (int i = 0; i < state.purchase!.payments!.length; i++) {
+          final payment = state.purchase!.payments![i];
           await PurchaseDatabase().storePurchasePayment({
             'purchase_id': purchaseId,
             'method': payment.method,
@@ -516,12 +538,22 @@ class PurchaseCreationNotifier extends StateNotifier<PurchaseCreationState> {
             'note': payment.note,
             'paid_on': payment.paidOn?.toIso8601String(),
           });
+          print(
+              '   • Payment ${i + 1}: ${payment.method}, Amount: ${payment.amount}');
         }
+        print('✅ PURCHASE CREATION: All payments saved');
+      } else {
+        print('💳 PURCHASE CREATION: No payments to save');
       }
 
+      // Check connectivity for API sync
+      final hasConnectivity = await Helper().checkConnectivity();
+      print('📡 PURCHASE CREATION: Internet connectivity: $hasConnectivity');
+
       // Try to sync with API if connected
-      try {
-        if (await Helper().checkConnectivity()) {
+      if (hasConnectivity) {
+        print('🔄 PURCHASE CREATION: Attempting to sync with server...');
+        try {
           final request = CreatePurchaseRequest(
             purchase: state.purchase!,
             payments: state.purchase!.payments,
@@ -531,31 +563,53 @@ class PurchaseCreationNotifier extends StateNotifier<PurchaseCreationState> {
 
           // Update database with sync status and transaction ID
           if (result != null && result.id != null) {
+            print(
+                '✅ PURCHASE CREATION: Successfully synced with server - Transaction ID: ${result.id}');
             await PurchaseDatabase().updatePurchase(purchaseId, {
               'is_synced': 1,
               'transaction_id': result.id,
             });
+            print(
+                '💾 PURCHASE CREATION: Local database updated with sync status');
+          } else {
+            print(
+                '⚠️ PURCHASE CREATION: API returned success but no transaction ID');
           }
-        } else {
-          // Offline mode - purchase saved locally, will sync later
-          print('Purchase saved locally (offline mode)');
+        } catch (apiError) {
+          print('❌ PURCHASE CREATION: API sync failed: $apiError');
+          print(
+              'ℹ️ PURCHASE CREATION: Purchase saved locally, will sync later when online');
+
+          // Check if it's an authentication error
+          if (apiError.toString().contains('401') ||
+              apiError.toString().contains('Authentication failed')) {
+            print(
+                '🔐 PURCHASE CREATION: Authentication error - user may need to login again');
+          }
         }
-      } catch (apiError) {
-        // API sync failed, but purchase is saved locally
-        // This is expected in offline mode or network issues
-        print('API sync failed, purchase saved locally: $apiError');
-        // Don't show error to user as this is expected behavior
+      } else {
+        print(
+            '📴 PURCHASE CREATION: Offline mode - purchase saved locally, will sync when online');
+        print(
+            '💡 PURCHASE CREATION: To sync later, go online and use the sync button');
       }
 
       // Reset for a new entry
+      print('🔄 PURCHASE CREATION: Resetting form for new purchase...');
       _initializePurchase();
       state = state.copyWith(
         isSubmitting: false,
         errorMessage: null,
       );
 
+      print('🎉 PURCHASE CREATION: Purchase creation completed successfully!');
+      print(
+          '📈 PURCHASE CREATION: Summary - ID: $purchaseId, Synced: ${hasConnectivity ? 'Yes' : 'No (will sync later)'}');
+
       return true;
     } catch (e) {
+      print(
+          '💥 PURCHASE CREATION: Critical error during purchase creation: $e');
       state = state.copyWith(
         isSubmitting: false,
         errorMessage: e.toString(),

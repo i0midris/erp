@@ -10,18 +10,74 @@ import 'api.dart';
 class PurchaseApi extends Api {
   // Create a purchase in API
   Future<Map<String, dynamic>?> create(data) async {
-    String url = this.baseUrl + this.apiUrl + "/purchase";
-    var token = await System().getToken();
-    var response = await http.post(Uri.parse(url),
-        headers: this.getHeader('$token'), body: data);
-    var info = jsonDecode(response.body);
+    try {
+      String url = this.baseUrl + this.apiUrl + "/purchase";
+      var token = await System().getToken();
 
-    if (response.statusCode == 200 && info != null) {
-      return {
-        'transaction_id': info['id'] ?? info['transaction_id'],
-        'payment_lines': info['payment_lines'] ?? [],
-      };
-    } else {
+      log("Purchase API: Making request to $url");
+      log("Purchase API: Request data: $data");
+
+      var response = await http.post(Uri.parse(url),
+          headers: this.getHeader('$token'), body: data);
+
+      log("Purchase API: Response status: ${response.statusCode}");
+      log("Purchase API: Response body: ${response.body}");
+
+      // Handle both 200 (OK) and 201 (Created) status codes
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        if (response.body == null || response.body.isEmpty) {
+          log("Purchase API: Response body is empty");
+          return null;
+        }
+
+        var info;
+        try {
+          info = jsonDecode(response.body);
+          log("Purchase API: Parsed JSON: $info");
+        } catch (jsonError) {
+          log("Purchase API: JSON decode error: $jsonError");
+          return null;
+        }
+
+        if (info != null) {
+          // Handle Laravel API response format with nested data
+          var transactionId;
+          var paymentLines = [];
+
+          // Check if data is nested in 'data' key (Laravel API format)
+          if (info['data'] != null && info['data'] is Map) {
+            var data = info['data'];
+            transactionId = data['id'] ?? data['transaction_id'];
+            paymentLines = data['payment_lines'] ?? data['payments'] ?? [];
+            log("Purchase API: Found nested data format, transactionId: $transactionId");
+          } else {
+            // Direct access for other API formats
+            transactionId = info['id'] ?? info['transaction_id'];
+            paymentLines = info['payment_lines'] ?? info['payments'] ?? [];
+            log("Purchase API: Found direct format, transactionId: $transactionId");
+          }
+
+          if (transactionId != null) {
+            log("Purchase API: Returning success with transaction_id: $transactionId");
+            return {
+              'transaction_id': transactionId,
+              'payment_lines': paymentLines,
+            };
+          } else {
+            log("Purchase API: No transaction_id found in response");
+          }
+        } else {
+          log("Purchase API: Parsed info is null");
+        }
+      } else {
+        log("Purchase API: Unexpected status code: ${response.statusCode}");
+      }
+
+      // Log error details for debugging
+      log("Purchase API Error - Status: ${response.statusCode}, Response: ${response.body}");
+      return null;
+    } catch (e) {
+      log("Purchase API: Exception occurred: $e");
       return null;
     }
   }

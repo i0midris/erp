@@ -437,104 +437,306 @@ class PurchaseManagementNotifier
 
   /// Sync purchases with server
   Future<bool> syncPurchases() async {
+    print('🔄 SYNC: Starting purchase synchronization process...');
+
     try {
-      if (await Helper().checkConnectivity()) {
-        // Check authentication before syncing
-        final system = System();
-        final isAuthenticated = await system.isAuthenticated();
+      // Check internet connectivity
+      final hasConnectivity = await Helper().checkConnectivity();
+      print('📡 SYNC: Internet connectivity check: $hasConnectivity');
 
-        if (!isAuthenticated) {
-          state =
-              state.copyWith(errorMessage: 'Please login to sync purchases');
-          return false;
-        }
+      if (!hasConnectivity) {
+        print('📴 SYNC: No internet connection - cannot sync');
+        state = state.copyWith(errorMessage: 'No internet connection for sync');
+        return false;
+      }
 
-        // Refresh cache before syncing
-        await _cacheService.refreshCacheIfNeeded();
+      // Check authentication before syncing
+      print('🔐 SYNC: Checking authentication status...');
+      final system = System();
+      final isAuthenticated = await system.isAuthenticated();
+      print('🔐 SYNC: Authentication status: $isAuthenticated');
 
-        // Get unsynced purchases from database
-        final unsyncedPurchases =
-            await PurchaseDatabase().getNotSyncedPurchases();
+      if (!isAuthenticated) {
+        print('❌ SYNC: User not authenticated - cannot sync');
+        state = state.copyWith(errorMessage: 'Please login to sync purchases');
+        return false;
+      }
 
-        int syncedCount = 0;
-        for (final dbPurchase in unsyncedPurchases) {
-          try {
-            // Load purchase lines for this purchase
-            final purchaseLines =
-                await PurchaseDatabase().getPurchaseLines(dbPurchase['id']);
+      // Refresh cache before syncing
+      print('🔄 SYNC: Refreshing cache before sync...');
+      await _cacheService.refreshCacheIfNeeded();
+      print('✅ SYNC: Cache refresh completed');
 
-            // Create API request from database data
-            final purchaseData = {
-              'business_id': 1, // Default business ID
-              'contact_id': dbPurchase['contact_id'],
-              'location_id': dbPurchase['location_id'],
-              'ref_no': dbPurchase['ref_no'],
-              'status': dbPurchase['status'],
-              'transaction_date': dbPurchase['transaction_date'],
-              'total_before_tax': dbPurchase['total_before_tax'],
-              'discount_type': dbPurchase['discount_type'],
-              'discount_amount': dbPurchase['discount_amount'],
-              'tax_id': dbPurchase['tax_id'],
-              'tax_amount': dbPurchase['tax_amount'],
-              'shipping_charges': dbPurchase['shipping_charges'],
-              'shipping_details': dbPurchase['shipping_details'],
-              'final_total': dbPurchase['final_total'],
-              'additional_notes': dbPurchase['additional_notes'],
-              'purchases': purchaseLines
-                  .map((line) => {
-                        'product_id': line['product_id'],
-                        'variation_id': line['variation_id'],
-                        'quantity': line['quantity'],
-                        'unit_price': line['unit_price'],
-                        'line_discount_amount': line['line_discount_amount'],
-                        'line_discount_type': line['line_discount_type'],
-                        'item_tax_id': line['item_tax_id'],
-                        'item_tax': line['item_tax'],
-                        'sub_unit_id': line['sub_unit_id'],
-                        'lot_number': line['lot_number'],
-                        'mfg_date': line['mfg_date'],
-                        'exp_date': line['exp_date'],
-                        'purchase_order_line_id':
-                            line['purchase_order_line_id'],
-                        'purchase_requisition_line_id':
-                            line['purchase_requisition_line_id'],
-                      })
-                  .toList(),
-            };
+      // Get unsynced purchases from database
+      print('📦 SYNC: Fetching unsynced purchases from database...');
+      final unsyncedPurchases =
+          await PurchaseDatabase().getNotSyncedPurchases();
+      print('📦 SYNC: Found ${unsyncedPurchases.length} unsynced purchases');
 
-            final result = await _purchaseApi.createPurchase(purchaseData);
-            if (result != null && result['transaction_id'] != null) {
+      if (unsyncedPurchases.isEmpty) {
+        print('ℹ️ SYNC: No unsynced purchases found - sync complete');
+        return true;
+      }
+
+      int syncedCount = 0;
+      int failedCount = 0;
+
+      for (int i = 0; i < unsyncedPurchases.length; i++) {
+        final dbPurchase = unsyncedPurchases[i];
+        final purchaseId = dbPurchase['id'];
+        final refNo = dbPurchase['ref_no'] ?? 'No Ref';
+
+        print(
+            '🔄 SYNC: Processing purchase ${i + 1}/${unsyncedPurchases.length} (ID: $purchaseId, Ref: $refNo)');
+
+        try {
+          // Load purchase lines for this purchase
+          print('📋 SYNC: Loading purchase lines for purchase $purchaseId...');
+          final purchaseLines =
+              await PurchaseDatabase().getPurchaseLines(purchaseId);
+          print(
+              '📋 SYNC: Found ${purchaseLines.length} purchase lines for purchase $purchaseId');
+
+          if (purchaseLines.isEmpty) {
+            print(
+                '⚠️ SYNC: No purchase lines found for purchase $purchaseId - skipping');
+            failedCount++;
+            continue;
+          }
+
+          // Create API request from database data
+          print(
+              '📝 SYNC: Preparing API request data for purchase $purchaseId...');
+          final purchaseData = {
+            'business_id': 1, // Default business ID
+            'contact_id': dbPurchase['contact_id'],
+            'location_id': dbPurchase['location_id'],
+            'ref_no': dbPurchase['ref_no'],
+            'status': dbPurchase['status'],
+            'transaction_date': dbPurchase['transaction_date'],
+            'total_before_tax': dbPurchase['total_before_tax'],
+            'discount_type': dbPurchase['discount_type'],
+            'discount_amount': dbPurchase['discount_amount'],
+            'tax_id': dbPurchase['tax_id'],
+            'tax_amount': dbPurchase['tax_amount'],
+            'shipping_charges': dbPurchase['shipping_charges'],
+            'shipping_details': dbPurchase['shipping_details'],
+            'final_total': dbPurchase['final_total'],
+            'additional_notes': dbPurchase['additional_notes'],
+            'purchases': purchaseLines
+                .map((line) => {
+                      'product_id': line['product_id'],
+                      'variation_id': line['variation_id'],
+                      'quantity': line['quantity'],
+                      'unit_price': line['unit_price'],
+                      'line_discount_amount': line['line_discount_amount'],
+                      'line_discount_type': line['line_discount_type'],
+                      'item_tax_id': line['item_tax_id'],
+                      'item_tax': line['item_tax'],
+                      'sub_unit_id': line['sub_unit_id'],
+                      'lot_number': line['lot_number'],
+                      'mfg_date': line['mfg_date'],
+                      'exp_date': line['exp_date'],
+                      'purchase_order_line_id': line['purchase_order_line_id'],
+                      'purchase_requisition_line_id':
+                          line['purchase_requisition_line_id'],
+                    })
+                .toList(),
+          };
+
+          print('🌐 SYNC: Sending purchase $purchaseId to API...');
+          print(
+              '📊 SYNC: Purchase data summary - Contact: ${purchaseData['contact_id']}, Total: ${purchaseData['final_total']}, Lines: ${purchaseLines.length}');
+
+          final result = await _purchaseApi.createPurchase(purchaseData);
+          print('📡 SYNC: HTTP request completed for purchase $purchaseId');
+
+          // Log the full API response for debugging
+          print('📥 SYNC: API Response for purchase $purchaseId: $result');
+
+          if (result != null) {
+            print('🔍 SYNC: Checking API response structure...');
+            print('   • Result type: ${result.runtimeType}');
+            print(
+                '   • Has transaction_id: ${result.containsKey('transaction_id')}');
+            print('   • Has id: ${result.containsKey('id')}');
+            print('   • Has success: ${result.containsKey('success')}');
+            print('   • Has data: ${result.containsKey('data')}');
+
+            // Log all keys in the response
+            if (result is Map) {
+              print('   • All keys: ${result.keys.toList()}');
+              result.forEach((key, value) {
+                print('   • $key: $value (${value.runtimeType})');
+              });
+            }
+
+            // Check for transaction_id first (Laravel API standard)
+            if (result['transaction_id'] != null) {
+              print(
+                  '✅ SYNC: Successfully synced purchase $purchaseId - Server ID: ${result['transaction_id']}');
+
               // Update database with sync status
-              await PurchaseDatabase().updatePurchase(dbPurchase['id'], {
+              print(
+                  '💾 SYNC: Updating local database for purchase $purchaseId...');
+              await PurchaseDatabase().updatePurchase(purchaseId, {
                 'is_synced': 1,
                 'transaction_id': result['transaction_id'],
               });
               syncedCount++;
+              print('✅ SYNC: Local database updated for purchase $purchaseId');
             }
-          } catch (syncError) {
-            print('Failed to sync purchase ${dbPurchase['id']}: $syncError');
-            // Continue with next purchase instead of failing completely
+            // Check for id field (alternative API response format)
+            else if (result['id'] != null) {
+              print(
+                  '✅ SYNC: Successfully synced purchase $purchaseId - Server ID: ${result['id']}');
+
+              // Update database with sync status
+              print(
+                  '💾 SYNC: Updating local database for purchase $purchaseId...');
+              await PurchaseDatabase().updatePurchase(purchaseId, {
+                'is_synced': 1,
+                'transaction_id': result['id'],
+              });
+              syncedCount++;
+              print('✅ SYNC: Local database updated for purchase $purchaseId');
+            }
+            // Check for nested data structure
+            else if (result['data'] != null && result['data'] is Map) {
+              final data = result['data'] as Map;
+              if (data['id'] != null) {
+                print(
+                    '✅ SYNC: Successfully synced purchase $purchaseId - Server ID: ${data['id']}');
+
+                // Update database with sync status
+                print(
+                    '💾 SYNC: Updating local database for purchase $purchaseId...');
+                await PurchaseDatabase().updatePurchase(purchaseId, {
+                  'is_synced': 1,
+                  'transaction_id': data['id'],
+                });
+                syncedCount++;
+                print(
+                    '✅ SYNC: Local database updated for purchase $purchaseId');
+              } else if (data['transaction_id'] != null) {
+                print(
+                    '✅ SYNC: Successfully synced purchase $purchaseId - Server ID: ${data['transaction_id']}');
+
+                // Update database with sync status
+                print(
+                    '💾 SYNC: Updating local database for purchase $purchaseId...');
+                await PurchaseDatabase().updatePurchase(purchaseId, {
+                  'is_synced': 1,
+                  'transaction_id': data['transaction_id'],
+                });
+                syncedCount++;
+                print(
+                    '✅ SYNC: Local database updated for purchase $purchaseId');
+              } else {
+                print(
+                    '❌ SYNC: API response has data but no ID fields for purchase $purchaseId');
+                failedCount++;
+              }
+            }
+            // Check for success flag
+            else if (result['success'] == true) {
+              print(
+                  '⚠️ SYNC: API reported success but no ID returned for purchase $purchaseId');
+              print(
+                  '🔍 SYNC: This might indicate the purchase was created but ID not returned');
+              print(
+                  '💡 SYNC: You may need to check the Laravel API response format');
+
+              // Still mark as synced to avoid repeated attempts
+              await PurchaseDatabase().updatePurchase(purchaseId, {
+                'is_synced': 1,
+                'transaction_id': null, // No server ID available
+              });
+              syncedCount++;
+              print(
+                  '✅ SYNC: Marked purchase $purchaseId as synced (no server ID)');
+            }
+            // Check for direct purchase data response (Laravel API returns purchase object directly)
+            else if (result is Map &&
+                result['contact_id'] != null &&
+                result['location_id'] != null &&
+                result['ref_no'] != null) {
+              print(
+                  '✅ SYNC: Successfully synced purchase $purchaseId - Direct purchase data received');
+              print(
+                  '📋 SYNC: Purchase details - Contact: ${result['contact_id']}, Ref: ${result['ref_no']}, Total: ${result['final_total']}');
+
+              // Update database with sync status
+              print(
+                  '💾 SYNC: Updating local database for purchase $purchaseId...');
+              await PurchaseDatabase().updatePurchase(purchaseId, {
+                'is_synced': 1,
+                'transaction_id':
+                    null, // No explicit transaction ID in direct response
+              });
+              syncedCount++;
+              print('✅ SYNC: Local database updated for purchase $purchaseId');
+            } else {
+              print(
+                  '❌ SYNC: API response indicates failure for purchase $purchaseId');
+              print('📋 SYNC: Response details: $result');
+              failedCount++;
+            }
+          } else {
+            print(
+                '❌ SYNC: API returned null response for purchase $purchaseId');
+            failedCount++;
           }
+        } catch (syncError) {
+          print('❌ SYNC: Failed to sync purchase $purchaseId: $syncError');
+          failedCount++;
+
+          // Log specific error types
+          if (syncError.toString().contains('401')) {
+            print('🔐 SYNC: Authentication error for purchase $purchaseId');
+          } else if (syncError.toString().contains('422')) {
+            print('📝 SYNC: Validation error for purchase $purchaseId');
+          } else if (syncError.toString().contains('500')) {
+            print('🖥️ SYNC: Server error for purchase $purchaseId');
+          }
+
+          // Continue with next purchase instead of failing completely
         }
-
-        // Reload purchases after sync
-        await loadPurchases();
-
-        print('✅ Synced $syncedCount purchases successfully');
-        return syncedCount > 0;
-      } else {
-        state = state.copyWith(errorMessage: 'No internet connection for sync');
-        return false;
       }
+
+      // Reload purchases after sync
+      print('🔄 SYNC: Reloading purchases after sync...');
+      await loadPurchases();
+      print('✅ SYNC: Purchase reload completed');
+
+      // Final summary
+      print('📊 SYNC SUMMARY:');
+      print('   • Total purchases processed: ${unsyncedPurchases.length}');
+      print('   • Successfully synced: $syncedCount');
+      print('   • Failed to sync: $failedCount');
+      print(
+          '   • Success rate: ${unsyncedPurchases.length > 0 ? (syncedCount / unsyncedPurchases.length * 100).toStringAsFixed(1) : 0}%');
+
+      if (syncedCount > 0) {
+        print('🎉 SYNC: Synchronization completed successfully!');
+      } else if (failedCount > 0) {
+        print('⚠️ SYNC: Synchronization completed with failures');
+      }
+
+      return syncedCount > 0;
     } catch (e) {
+      print('💥 SYNC: Critical error during synchronization: $e');
+
       // Handle authentication errors specifically
       if (e.toString().contains('Authentication failed') ||
           e.toString().contains('401')) {
+        print('🔐 SYNC: Authentication failed - user needs to login again');
         state = state.copyWith(
             errorMessage: 'Authentication failed. Please login again.');
         return false;
       }
 
+      print('❌ SYNC: Synchronization failed with error: $e');
       state = state.copyWith(errorMessage: 'Failed to sync purchases: $e');
       return false;
     }
@@ -542,11 +744,27 @@ class PurchaseManagementNotifier
 
   /// Refresh cache if stale
   Future<void> refreshCacheIfNeeded() async {
+    print('🔄 CACHE: Starting cache refresh...');
     try {
-      await _cacheService.refreshCacheIfNeeded();
-      print('Cache refreshed successfully');
+      final hasConnectivity = await Helper().checkConnectivity();
+      print('📡 CACHE: Connectivity check: $hasConnectivity');
+
+      if (hasConnectivity) {
+        print(
+            '📥 CACHE: Refreshing suppliers, products, and locations from server...');
+        await _cacheService.refreshCacheIfNeeded();
+        print('✅ CACHE: Cache refresh completed successfully');
+      } else {
+        print('📴 CACHE: No internet - using cached data only');
+      }
     } catch (e) {
-      print('Failed to refresh cache: $e');
+      print('❌ CACHE: Failed to refresh cache: $e');
+
+      if (e.toString().contains('401')) {
+        print('🔐 CACHE: Authentication error during cache refresh');
+      } else if (e.toString().contains('no such table')) {
+        print('💾 CACHE: Database table missing - may need app restart');
+      }
     }
   }
 
@@ -573,6 +791,56 @@ class PurchaseManagementNotifier
   /// Clear error message
   void clearError() {
     state = state.copyWith(errorMessage: null);
+  }
+
+  /// Debug method to inspect current state
+  void debugCurrentState() {
+    print('🐛 DEBUG: Current Purchase Management State');
+    print('   • Total purchases: ${state.purchases.length}');
+    print('   • Suppliers cached: ${state.suppliers.length}');
+    print('   • Products cached: ${state.products.length}');
+    print('   • Is loading: ${state.isLoading}');
+    print('   • Is refreshing: ${state.isRefreshing}');
+    print('   • Error message: ${state.errorMessage ?? 'None'}');
+    print('   • Selected status: ${state.selectedStatus}');
+    print('   • Selected supplier: ${state.selectedSupplier}');
+    print('   • Search query: "${state.searchQuery}"');
+  }
+
+  /// Debug method to check database state
+  Future<void> debugDatabaseState() async {
+    print('💾 DEBUG: Database State Inspection');
+
+    try {
+      // Check local purchases
+      final localPurchases = await PurchaseDatabase().getPurchases();
+      print('   • Local purchases: ${localPurchases.length}');
+
+      // Check unsynced purchases
+      final unsyncedPurchases =
+          await PurchaseDatabase().getNotSyncedPurchases();
+      print('   • Unsynced purchases: ${unsyncedPurchases.length}');
+
+      // Check cached data
+      final cachedSuppliers = await _cacheService.getCachedSuppliers();
+      final cachedProducts = await _cacheService.getCachedProducts();
+      final cachedLocations = await _cacheService.getCachedLocations();
+
+      print('   • Cached suppliers: ${cachedSuppliers.length}');
+      print('   • Cached products: ${cachedProducts.length}');
+      print('   • Cached locations: ${cachedLocations.length}');
+
+      // Check authentication
+      final system = System();
+      final isAuthenticated = await system.isAuthenticated();
+      print('   • Is authenticated: $isAuthenticated');
+
+      // Check connectivity
+      final hasConnectivity = await Helper().checkConnectivity();
+      print('   • Has connectivity: $hasConnectivity');
+    } catch (e) {
+      print('❌ DEBUG: Error inspecting database: $e');
+    }
   }
 }
 

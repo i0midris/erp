@@ -71,13 +71,25 @@ class PurchaseApiBridge {
   Future<Map<String, dynamic>?> createPurchase(
       Map<String, dynamic> purchaseData) async {
     try {
+      print("PurchaseApiBridge: Starting createPurchase");
+      print("PurchaseApiBridge: Purchase data: $purchaseData");
+
       // Convert legacy format to modern format
       final purchase = Purchase.fromJson(purchaseData);
       final request = CreatePurchaseRequest(purchase: purchase);
 
+      print(
+          "PurchaseApiBridge: Converted to Purchase model, calling modern API");
+
       final createdPurchase = await _modernApi.createPurchase(request);
+
+      print(
+          "PurchaseApiBridge: Modern API returned: ${createdPurchase.toJson()}");
+
       return createdPurchase.toJson();
     } catch (e) {
+      print("PurchaseApiBridge: Exception occurred: $e");
+      print("PurchaseApiBridge: Exception type: ${e.runtimeType}");
       return null;
     }
   }
